@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# CodeWeaver sanity-check suite (PRD section 9).
+#
+# Runs every applicable check and prints one line per check with an explicit
+# PASS / FAIL / SKIP verdict.  Skipped checks always state why they were
+# skipped: a missing optional toolchain must never be reported as a pass.
+#
+# Usage:
+#   scripts/sanity-check            # full suite
+#   scripts/sanity-check --fast     # formatting, lint and unit tests only
+#
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 2
+
+FAST=0
+for arg in "$@"; do
+  case "$arg" in
+    --fast) FAST=1 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "sanity-check: unknown argument '$arg'" >&2; exit 2 ;;
+  esac
+done
+
+PY="${PYTHON:-python3}"
+export PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+
+PASS=0; FAIL=0; SKIP=0
+RESULTS=()
+LOGDIR="$(mktemp -d)"
+trap 'rm -rf "$LOGDIR"' EXIT
+
+bold() { printf '\033[1m%s\033[0m\n' "$1"; }
+
+# run <name> <command...>
+run() {
+  local name="$1"; shift
+  local log="$LOGDIR/$(echo "$name" | tr -cd '[:alnum:]').log"
+  printf '  %-34s ' "$name"
+  if "$@" >"$log" 2>&1; then
+    printf '\033[32mPASS\033[0m\n'
+    PASS=$((PASS + 1)); RESULTS+=("PASS  $name")
+  else
+    local code=$?
+    printf '\033[31mFAIL\033[0m (exit %d)\n' "$code"
+    sed 's/^/      | /' "$log" | tail -40
+    FAIL=$((FAIL + 1)); RESULTS+=("FAIL  $name (exit $code)")
+  fi
+}
+
+# skip <name> <reason>
+skip() {
+  printf '  %-34s \033[33mSKIP\033[0m (%s)\n' "$1" "$2"
+  SKIP=$((SKIP + 1)); RESULTS+=("SKIP  $1 ($2)")
+}
+
+bold "CodeWeaver sanity check"
+echo "  python: $($PY --version 2>&1)"
+echo "  repo:   $(pwd)"
+echo
+
+bold "1. environment"
+run "python version supported" "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
+run "package imports" "$PY" -c 'import codeweaver; print(codeweaver.__version__)'
+
+bold "2. formatting and lint"
+if command -v ruff >/dev/null 2>&1; then
+  run "ruff format --check" ruff format --check .
+  run "ruff check" ruff check .
+else
+  skip "ruff format --check" "ruff not installed"
+  skip "ruff check" "ruff not installed"
+fi
+
+bold "3. static types"
+if command -v mypy >/dev/null 2>&1; then
+  run "mypy" mypy
+else
+  skip "mypy" "mypy not installed (pip install -e '.[dev]')"
+fi
+
+bold "4. tests"
+run "unit tests" "$PY" -m unittest discover -s tests/unit -t . -q
+if [ "$FAST" -eq 1 ]; then
+  skip "integration tests" "--fast"
+  skip "regression tests" "--fast"
+  skip "security tests" "--fast"
+else
+  if [ -n "$(find tests/integration -name 'test_*.py' -print -quit 2>/dev/null)" ]; then
+    run "integration tests" "$PY" -m unittest discover -s tests/integration -t . -q
+  else
+    skip "integration tests" "no integration tests yet"
+  fi
+  if [ -n "$(find tests/regression -name 'test_*.py' -print -quit 2>/dev/null)" ]; then
+    run "regression tests" "$PY" -m unittest discover -s tests/regression -t . -q
+  else
+    skip "regression tests" "no regression tests yet"
+  fi
+  if [ -n "$(find tests/security -name 'test_*.py' -print -quit 2>/dev/null)" ]; then
+    run "security tests" "$PY" -m unittest discover -s tests/security -t . -q
+  else
+    skip "security tests" "no security tests yet"
+  fi
+fi
+
+bold "5. summary"
+printf '  %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
+if [ "$FAIL" -gt 0 ]; then
+  echo
+  echo "  failed checks:"
+  for line in "${RESULTS[@]}"; do
+    case "$line" in FAIL*) echo "    $line" ;; esac
+  done
+  exit 1
+fi
+exit 0
