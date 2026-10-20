@@ -155,8 +155,21 @@ def _literal(node: IRLiteral, ctx: EmitContext) -> Emitted:
     return Emitted("undefined")
 
 
-def _name(node: IRName, ctx: EmitContext) -> Emitted:  # noqa: ARG001 - uniform handler signature
+def _name(node: IRName, ctx: EmitContext) -> Emitted:
+    if ctx.receiver and node.name == ctx.receiver:
+        return Emitted("this")
     return Emitted(safe_identifier(node.name))
+
+
+def _is_super(node: IRNode) -> bool:
+    """True for a bare ``super()`` call, which TypeScript spells ``super``."""
+    return (
+        isinstance(node, IRCall)
+        and isinstance(node.callee, IRName)
+        and node.callee.name == "super"
+        and not node.args
+        and not node.keywords
+    )
 
 
 def _binary(node: IRBinary, ctx: EmitContext) -> Emitted:
@@ -233,6 +246,14 @@ def _logical(node: IRLogical, ctx: EmitContext) -> Emitted:
 
 
 def _call(node: IRCall, ctx: EmitContext) -> Emitted:
+    # `super().__init__(a)` is `super(a)` in TypeScript, not a method call.
+    if (
+        isinstance(node.callee, IRAttribute)
+        and node.callee.name == "__init__"
+        and _is_super(node.callee.target)
+    ):
+        arguments = ", ".join(emit_expression(item, ctx).text for item in node.args)
+        return Emitted(f"super({arguments})", _MEMBER)
     callee = emit_expression(node.callee, ctx).at_least(_MEMBER)
     arguments = [emit_expression(argument, ctx).text for argument in node.args]
     arguments.extend(f"...{emit_expression(item, ctx).at_least(_UNARY)}" for item in node.star_args)
@@ -259,7 +280,10 @@ def _call(node: IRCall, ctx: EmitContext) -> Emitted:
 
 
 def _attribute(node: IRAttribute, ctx: EmitContext) -> Emitted:
-    target = emit_expression(node.target, ctx).at_least(_MEMBER)
+    if _is_super(node.target):
+        target = "super"
+    else:
+        target = emit_expression(node.target, ctx).at_least(_MEMBER)
     name = node.name
     if name.isidentifier() and safe_property(name) == name:
         return Emitted(f"{target}.{name}", _MEMBER)

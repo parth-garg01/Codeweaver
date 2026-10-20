@@ -26,6 +26,9 @@ class EmitContext:
     gaps: list[IRUnsupported] = field(default_factory=list)
     #: Runtime helpers the generated module needs (emitted as a prelude).
     helpers: set[str] = field(default_factory=set)
+    #: Name of the method receiver in the body being emitted (Python's
+    #: ``self``/``cls``).  References to it become ``this``.
+    receiver: str = ""
 
     def record_gap(self, node: IRUnsupported) -> str:
         """Record an unsupported node and return the marker comment text."""
