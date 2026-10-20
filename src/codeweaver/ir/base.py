@@ -162,7 +162,9 @@ class IRUnsupported(IRNode):
     """A construct that has no mapping in this build.
 
     The node is a real part of the tree: backends emit an explicit marker for
-    it and the report counts it.  ``source_kind`` is the frontend's own name for
+    it and the report counts it.  It is position-agnostic — it stands wherever
+    the construct it replaced stood, so it is accepted in both statement and
+    expression slots.  ``source_kind`` is the frontend's own name for
     the construct (for example ``"Yield"``), which keeps the diagnostic specific
     enough to act on.
     """
