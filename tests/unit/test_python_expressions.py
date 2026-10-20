@@ -234,16 +234,25 @@ class MiscExpressionTests(ExpressionConversionTestCase):
 
 
 class UnsupportedExpressionTests(ExpressionConversionTestCase):
-    def test_comprehensions_are_reported_with_a_hint(self) -> None:
-        for text in (
-            "[x for x in xs]",
-            "{x for x in xs}",
-            "{k: v for k, v in xs}",
-            "(x for x in xs)",
-        ):
-            node = self.convert(text)
-            self.assertIsInstance(node, IRUnsupported)
-            self.assertIn("explicit loop", node.hint)
+    def test_generator_expressions_are_reported_as_lazy(self) -> None:
+        node = self.convert("(x for x in xs)")
+        self.assertIsInstance(node, IRUnsupported)
+        self.assertIn("list(...)", node.hint)
+
+    def test_nested_comprehension_clauses_are_reported(self) -> None:
+        node = self.convert("[x for x in xs for y in ys]")
+        self.assertIsInstance(node, IRUnsupported)
+        self.assertIn("nested explicit loops", node.hint)
+
+    def test_multiple_comprehension_filters_are_reported(self) -> None:
+        node = self.convert("[x for x in xs if a if b]")
+        self.assertIsInstance(node, IRUnsupported)
+        self.assertIn("'and'", node.hint)
+
+    def test_comprehension_with_a_tuple_target_is_reported(self) -> None:
+        node = self.convert("{k: v for k, v in pairs}")
+        self.assertIsInstance(node, IRUnsupported)
+        self.assertIn("unpack inside the body", node.hint)
 
     def test_walrus_is_reported(self) -> None:
         node = convert_expression(
@@ -254,12 +263,48 @@ class UnsupportedExpressionTests(ExpressionConversionTestCase):
         self.assertEqual(node.source_kind, "NamedExpr")
 
     def test_unsupported_node_keeps_the_original_source_text(self) -> None:
-        node = self.convert("[x for x in xs]")
-        self.assertEqual(node.source_text, "[x for x in xs]")
+        node = self.convert("(x for x in xs)")
+        self.assertEqual(node.source_text, "(x for x in xs)")
 
     def test_every_unsupported_node_produces_a_diagnostic(self) -> None:
-        self.convert("[x for x in xs]")
+        self.convert("(x for x in xs)")
         self.assertEqual(self.warnings(), ["CW0400"])
+
+
+class ComprehensionConversionTests(ExpressionConversionTestCase):
+    def test_list_comprehension(self) -> None:
+        node = self.convert("[x * 2 for x in xs]")
+        self.assertEqual(node.kind, "comprehension")
+        self.assertEqual(node.form, "list")
+        self.assertEqual(node.target, "x")
+        self.assertEqual(node.iterable.name, "xs")
+        self.assertIsNone(node.condition)
+        self.assertEqual(str(node.value_type), "list[unknown]")
+
+    def test_list_comprehension_with_a_filter(self) -> None:
+        node = self.convert("[x for x in xs if x > 0]")
+        self.assertIsNotNone(node.condition)
+
+    def test_set_comprehension(self) -> None:
+        node = self.convert("{x for x in xs}")
+        self.assertEqual(node.form, "set")
+        self.assertEqual(str(node.value_type), "set[unknown]")
+
+    def test_dict_comprehension_keeps_key_and_value(self) -> None:
+        node = self.convert("{k: k * 2 for k in ks}")
+        self.assertEqual(node.form, "dict")
+        self.assertEqual(node.key.name, "k")
+        self.assertEqual(node.element.op.value, "mul")
+
+    def test_comprehension_produces_no_diagnostics(self) -> None:
+        self.convert("[x for x in xs]")
+        self.assertEqual(self.warnings(), [])
+
+    def test_comprehension_round_trips_through_serialisation(self) -> None:
+        from codeweaver.ir.base import node_from_dict
+
+        node = self.convert("[x for x in xs if x]")
+        self.assertEqual(node_from_dict(node.to_dict()), node)
 
 
 class ParameterConversionTests(unittest.TestCase):

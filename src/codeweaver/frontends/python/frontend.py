@@ -326,9 +326,12 @@ class PythonFrontend:
         "if/elif/else, while, for-each, break, continue",
         "try/except/else/finally, raise, assert",
         "lambdas and conditional expressions",
+        "single-clause list, set and dict comprehensions",
     )
     known_limitations = (
-        "comprehensions and generator expressions are reported, not translated",
+        "generator expressions are reported, not translated (they are lazy)",
+        "comprehensions with nested clauses, several filters or tuple targets "
+        "are reported, not translated",
         "context managers (with) are reported, not translated",
         "structural pattern matching is reported, not translated",
         "nested function and class definitions are reported, not lifted",

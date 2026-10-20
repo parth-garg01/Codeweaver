@@ -20,6 +20,7 @@ from codeweaver.ir.expressions import (
     IRBinary,
     IRCall,
     IRCompare,
+    IRComprehension,
     IRConditional,
     IRExpression,
     IRIndex,
@@ -315,12 +316,73 @@ def _starred(node: ast.Starred, ctx: ConversionContext) -> IRUnsupported:
     )
 
 
-def _comprehension(node: ast.expr, ctx: ConversionContext) -> IRUnsupported:
-    kind = type(node).__name__
-    return ctx.unsupported(
-        node,
-        f"{kind} is not lowered by this build",
-        hint="rewrite as an explicit loop, or wait for comprehension lowering",
+#: ast comprehension type -> IR comprehension form.
+_COMPREHENSION_FORMS: dict[type[ast.AST], str] = {
+    ast.ListComp: "list",
+    ast.SetComp: "set",
+    ast.DictComp: "dict",
+}
+
+
+def _comprehension(node: ast.expr, ctx: ConversionContext) -> IRExpression | IRUnsupported:
+    """Convert a comprehension, but only the single-clause shape.
+
+    Nested ``for`` clauses, several ``if`` guards and ``async for`` change
+    evaluation order when flattened, so they are reported instead.  A generator
+    expression is reported too: it is lazy, and every eager rewrite would
+    change when its side effects happen.
+    """
+    form = _COMPREHENSION_FORMS.get(type(node))
+    if form is None:
+        return ctx.unsupported(
+            node,
+            "generator expressions are lazy and have no eager equivalent",
+            hint="wrap it in list(...) if eager evaluation is acceptable",
+        )
+    generators = node.generators  # type: ignore[attr-defined]
+    if len(generators) != 1:
+        return ctx.unsupported(
+            node,
+            f"comprehension has {len(generators)} iteration clauses",
+            hint="rewrite as nested explicit loops",
+        )
+    clause = generators[0]
+    if clause.is_async:
+        return ctx.unsupported(
+            node,
+            "asynchronous comprehension has no IR mapping",
+            hint="collect the values with an explicit async loop",
+        )
+    if len(clause.ifs) > 1:
+        return ctx.unsupported(
+            node,
+            f"comprehension has {len(clause.ifs)} filters",
+            hint="combine the conditions with 'and'",
+        )
+    if not isinstance(clause.target, ast.Name):
+        return ctx.unsupported(
+            node,
+            "comprehension target is not a plain name",
+            hint="iterate over the sequence and unpack inside the body",
+        )
+    ctx.bound_names.add(clause.target.id)
+    condition = convert_expression(clause.ifs[0], ctx) if clause.ifs else None
+    if form == "dict":
+        key = convert_expression(node.key, ctx)  # type: ignore[attr-defined]
+        element = convert_expression(node.value, ctx)  # type: ignore[attr-defined]
+    else:
+        key = None
+        element = convert_expression(node.elt, ctx)  # type: ignore[attr-defined]
+    value_type = {"list": t_list(), "set": t_set(), "dict": t_dict()}[form]
+    return IRComprehension(
+        form=form,
+        target=clause.target.id,
+        iterable=convert_expression(clause.iter, ctx),
+        element=element,
+        key=key,
+        condition=condition,
+        value_type=value_type,
+        span=ctx.span(node),
     )
 
 
