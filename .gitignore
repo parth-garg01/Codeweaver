@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# CodeWeaver local state (never committed: may contain project metadata)
+.codeweaver/
+*.codeweaver-report.json
+
+# Generated migration output
+out/
+_generated/
+
+# Node (only used by generated TypeScript projects / validation)
+node_modules/
+
+# OS
+.DS_Store
+
+# Local maintenance helpers
+scripts/_*.sh
