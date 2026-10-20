@@ -15,11 +15,12 @@ __all__ = [
 ]
 
 #: Semantic version of the IR node schema.
-IR_SCHEMA_VERSION = "1.0.0"
+IR_SCHEMA_VERSION = "1.1.0"
 
 #: version -> what changed.
 SCHEMA_HISTORY: dict[str, str] = {
     "1.0.0": "Initial schema: modules, declarations, statements, expressions, types.",
+    "1.1.0": "IRField gains 'optional' for fields with no guaranteed initial value.",
 }
 
 
