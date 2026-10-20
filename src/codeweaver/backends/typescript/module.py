@@ -16,6 +16,10 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from codeweaver.backends.typescript.context import EmitContext
+from codeweaver.backends.typescript.exceptions import (
+    is_builtin_exception,
+    map_exception_name,
+)
 from codeweaver.backends.typescript.expressions import emit_expression, emit_params
 from codeweaver.backends.typescript.naming import safe_identifier, safe_property
 from codeweaver.backends.typescript.statements import emit_block, emit_statement
@@ -23,6 +27,7 @@ from codeweaver.backends.typescript.types import render_return_type, render_type
 from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.declarations import IRClass, IRFunction, IRImport, IRModule, Visibility
+from codeweaver.ir.expressions import IRName
 from codeweaver.ir.statements import IRVarDecl
 from codeweaver.ir.types import TypeKind
 
@@ -252,7 +257,7 @@ def _emit_class(klass: IRClass, writer: CodeWriter, ctx: EmitContext) -> None:
         )
     extends = ""
     if klass.bases:
-        extends = f" extends {emit_expression(klass.bases[0], ctx).text}"
+        extends = f" extends {_base_class_name(klass.bases[0], ctx)}"
     prefix = "export " if klass.visibility == Visibility.PUBLIC else ""
     writer.line(f"{prefix}class {safe_identifier(klass.name)}{extends} {{", klass.span)
     writer.indent()
@@ -264,6 +269,25 @@ def _emit_class(klass: IRClass, writer: CodeWriter, ctx: EmitContext) -> None:
         _emit_method(method, writer, ctx)
     writer.dedent()
     writer.line("}")
+
+
+def _base_class_name(base, ctx: EmitContext) -> str:
+    """Render a base class, mapping a builtin Python exception onto Error.
+
+    ``class MyError(Exception)`` has to extend something that exists at
+    runtime; ``Exception`` does not, so without the mapping every custom
+    exception class would fail to compile.
+    """
+    if isinstance(base, IRName) and is_builtin_exception(base.name):
+        mapped = map_exception_name(base.name)
+        ctx.warn(
+            "CW0642",
+            f"base class {base.name} is a Python builtin exception and becomes {mapped}",
+            span=base.span,
+            hint="the subclass keeps its own identity, but the hierarchy above it differs",
+        )
+        return safe_identifier(mapped)
+    return emit_expression(base, ctx).text
 
 
 def _emit_field(item, writer: CodeWriter, ctx: EmitContext) -> None:

@@ -15,12 +15,17 @@ approximated, and each one reports what it did:
 from __future__ import annotations
 
 from codeweaver.backends.typescript.context import EmitContext
+from codeweaver.backends.typescript.exceptions import (
+    COLLAPSED_TO_ERROR,
+    is_builtin_exception,
+    map_exception_name,
+)
 from codeweaver.backends.typescript.expressions import emit_expression
 from codeweaver.backends.typescript.naming import escape_string, safe_identifier
 from codeweaver.backends.typescript.types import render_type
 from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.ir.base import IRNode, IRUnsupported
-from codeweaver.ir.expressions import IRAttribute, IRIndex, IRName
+from codeweaver.ir.expressions import IRAttribute, IRCall, IRIndex, IRName
 from codeweaver.ir.operators import BinaryOp
 from codeweaver.ir.statements import (
     IRAssert,
@@ -247,17 +252,44 @@ def _throw(node: IRThrow, writer: CodeWriter, ctx: EmitContext) -> None:
         )
         writer.line(f"throw {_CAUGHT};", node.span)
         return
+    value = _emit_thrown(node.value, ctx)
     if node.cause is not None:
         ctx.warn(
             "CW0625",
             "exception chaining ('raise ... from ...') is emitted via the cause option",
             span=node.span,
         )
-        value = emit_expression(node.value, ctx).text
         cause = emit_expression(node.cause, ctx).text
         writer.line(f"throw Object.assign({value}, {{ cause: {cause} }});", node.span)
         return
-    writer.line(f"throw {emit_expression(node.value, ctx).text};", node.span)
+    writer.line(f"throw {value};", node.span)
+
+
+def _emit_thrown(value, ctx: EmitContext) -> str:
+    """Render a thrown value, adding ``new`` and mapping builtin exceptions.
+
+    ``raise ValueError("x")`` is a call in Python and a construction in
+    JavaScript, so the ``new`` is not optional: ``throw Error("x")`` happens to
+    work for the builtins but ``throw MyError("x")`` does not.
+    """
+    if isinstance(value, IRCall) and isinstance(value.callee, IRName):
+        name = value.callee.name
+        mapped = map_exception_name(name)
+        if is_builtin_exception(name) and name in COLLAPSED_TO_ERROR and mapped != name:
+            ctx.warn(
+                "CW0629",
+                f"{name} is thrown as {mapped}, so a catch can no longer "
+                f"distinguish it from other {mapped} values",
+                span=value.span,
+                hint="define a project exception class if the distinction matters",
+            )
+        arguments = ", ".join(emit_expression(item, ctx).text for item in value.args)
+        return f"new {safe_identifier(mapped)}({arguments})"
+    if isinstance(value, IRName):
+        # `raise Err` constructs in Python when Err is a class; without
+        # resolution the safest faithful output is to throw the value itself.
+        return safe_identifier(map_exception_name(value.name))
+    return emit_expression(value, ctx).text
 
 
 def _try(node: IRTry, writer: CodeWriter, ctx: EmitContext) -> None:
@@ -293,7 +325,7 @@ def _emit_handlers(handlers: list[IRCatch], writer: CodeWriter, ctx: EmitContext
     catch_all = next((handler for handler in handlers if not handler.exception_types), None)
     for position, handler in enumerate(typed):
         tests = " || ".join(
-            f"{_CAUGHT} instanceof {emit_expression(item, ctx).text}"
+            f"{_CAUGHT} instanceof {_emit_catch_type(item, ctx)}"
             for item in handler.exception_types
         )
         keyword = "if" if position == 0 else "} else if"
@@ -319,6 +351,22 @@ def _emit_handlers(handlers: list[IRCatch], writer: CodeWriter, ctx: EmitContext
         writer.line(f"throw {_CAUGHT};")
         writer.dedent()
         writer.line("}")
+
+
+def _emit_catch_type(item, ctx: EmitContext) -> str:
+    """Render a caught exception type, mapping Python builtins."""
+    if isinstance(item, IRName):
+        name = item.name
+        mapped = map_exception_name(name)
+        if mapped != name and name in COLLAPSED_TO_ERROR:
+            ctx.warn(
+                "CW0630",
+                f"except {name} becomes 'instanceof {mapped}', which also matches unrelated errors",
+                span=item.span,
+                hint="narrow the handler by inspecting the error, or use a project exception class",
+            )
+        return safe_identifier(mapped)
+    return emit_expression(item, ctx).text
 
 
 def _bind_caught(handler: IRCatch, writer: CodeWriter, ctx: EmitContext) -> None:
