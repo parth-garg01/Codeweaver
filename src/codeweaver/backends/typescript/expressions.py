@@ -30,6 +30,7 @@ from codeweaver.ir.expressions import (
     IRBinary,
     IRCall,
     IRCompare,
+    IRComprehension,
     IRConditional,
     IRIndex,
     IRLambda,
@@ -374,6 +375,41 @@ def _await(node: IRAwait, ctx: EmitContext) -> Emitted:
     return Emitted(f"await {operand}", _UNARY)
 
 
+def _comprehension(node: IRComprehension, ctx: EmitContext) -> Emitted:
+    """Generate a comprehension as an array method chain.
+
+    ``[f(x) for x in xs if p(x)]`` becomes ``xs.filter((x) => p(x)).map((x) =>
+    f(x))``.  The callback parameters are left unannotated so that TypeScript's
+    contextual typing infers them from the container, which gives a better type
+    than the ``unknown`` the IR would otherwise supply.
+
+    One difference is reported rather than hidden: the chain allocates an
+    intermediate array for the filter step, so a comprehension over a very
+    large sequence does more work than the original.
+    """
+    variable = safe_identifier(node.target)
+    chain = emit_expression(node.iterable, ctx).at_least(_MEMBER)
+    if node.condition is not None:
+        condition = emit_expression(node.condition, ctx).text
+        chain = f"{chain}.filter(({variable}) => {condition})"
+    if node.form == "dict":
+        key = emit_expression(node.key, ctx).text if node.key is not None else "undefined"
+        value = emit_expression(node.element, ctx).text
+        pairs = f"{chain}.map(({variable}) => [{key}, {value}])"
+        return Emitted(f"Object.fromEntries({pairs})", _MEMBER)
+    element = emit_expression(node.element, ctx)
+    identity = isinstance(node.element, IRName) and node.element.name == node.target
+    if identity and node.condition is None:
+        mapped = f"[...{chain}]"
+    elif identity:
+        mapped = chain
+    else:
+        mapped = f"{chain}.map(({variable}) => {element.text})"
+    if node.form == "set":
+        return Emitted(f"new Set({mapped})", _MEMBER)
+    return Emitted(mapped, _MEMBER)
+
+
 def emit_params(params: list[IRParam], ctx: EmitContext) -> str:
     """Render a parameter list, including types and defaults."""
     from codeweaver.backends.typescript.types import render_type
@@ -407,6 +443,7 @@ _HANDLERS: dict[type[IRNode], object] = {
     IRBinary: _binary,
     IRUnary: _unary,
     IRCompare: _compare,
+    IRComprehension: _comprehension,
     IRLogical: _logical,
     IRCall: _call,
     IRAttribute: _attribute,
