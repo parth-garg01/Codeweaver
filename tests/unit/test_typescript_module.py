@@ -266,3 +266,21 @@ class DeterminismTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoidReturnTests(unittest.TestCase):
+    def test_function_returning_none_is_void(self) -> None:
+        contents = generate("def f() -> None:\n    pass\n").contents
+        self.assertIn("export function f(): void {", contents)
+
+    def test_method_returning_none_is_void(self) -> None:
+        contents = generate("class C:\n    def f(self) -> None:\n        pass\n").contents
+        self.assertIn("f(): void {", contents)
+
+    def test_async_function_returning_none_is_a_void_promise(self) -> None:
+        contents = generate("async def f() -> None:\n    pass\n").contents
+        self.assertIn("Promise<void>", contents)
+
+    def test_a_variable_annotated_none_is_still_null(self) -> None:
+        contents = generate("x: None = None\n").contents
+        self.assertIn("x: null = null;", contents)

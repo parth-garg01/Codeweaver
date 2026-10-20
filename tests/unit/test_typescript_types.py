@@ -128,3 +128,24 @@ class ObjectTypeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReturnTypeTests(unittest.TestCase):
+    def test_none_return_becomes_void(self) -> None:
+        from codeweaver.backends.typescript.types import render_return_type
+
+        self.assertEqual(render_return_type(t_none()), "void")
+
+    def test_other_return_types_are_unchanged(self) -> None:
+        from codeweaver.backends.typescript.types import render_return_type
+
+        self.assertEqual(render_return_type(t_int()), "number")
+        self.assertEqual(render_return_type(None), "unknown")
+
+    def test_optional_return_is_still_a_null_union(self) -> None:
+        from codeweaver.backends.typescript.types import render_return_type
+
+        self.assertEqual(render_return_type(t_optional(t_int())), "number | null")
+
+    def test_value_position_still_renders_none_as_null(self) -> None:
+        self.assertEqual(render_type(t_none()), "null")
