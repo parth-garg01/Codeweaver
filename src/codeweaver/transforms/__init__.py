@@ -14,6 +14,7 @@ matters and is not arbitrary:
 
 from __future__ import annotations
 
+from codeweaver.ir.types import IRType
 from codeweaver.transforms.base import (
     PassOutcome,
     PassPipeline,
@@ -25,6 +26,7 @@ from codeweaver.transforms.construction import (
     mark_class_construction,
 )
 from codeweaver.transforms.fields import InferFieldsPass, infer_instance_fields
+from codeweaver.transforms.inheritance import collect_inherited_fields
 from codeweaver.transforms.range_loops import RangeLoopPass, lower_range_loops
 from codeweaver.transforms.rewrite import count_nodes, rewrite, rewrite_all
 from codeweaver.transforms.types import TypePropagationPass, propagate_types
@@ -38,6 +40,7 @@ __all__ = [
     "RangeLoopPass",
     "TransformPass",
     "TypePropagationPass",
+    "collect_inherited_fields",
     "count_nodes",
     "default_pipeline",
     "default_passes",
@@ -50,11 +53,28 @@ __all__ = [
 ]
 
 
-def default_passes() -> list[TransformPass]:
-    """The bundled passes, in the order they must run."""
-    return [InferFieldsPass(), RangeLoopPass(), TypePropagationPass()]
+def default_passes(
+    inherited_fields: dict[str, dict[str, IRType]] | None = None,
+) -> list[TransformPass]:
+    """The bundled passes, in the order they must run.
+
+    *inherited_fields* comes from project-wide analysis (see
+    :func:`codeweaver.transforms.inheritance.collect_inherited_fields`).  The
+    passes work without it; a subclass may then re-declare a base class's field
+    and see its inherited field types as unknown.
+    """
+    fields = inherited_fields or {}
+    return [
+        InferFieldsPass(inherited_fields=fields),
+        RangeLoopPass(),
+        TypePropagationPass(inherited_fields=fields),
+    ]
 
 
-def default_pipeline(target: str = "") -> PassPipeline:
+def default_pipeline(
+    target: str = "",
+    *,
+    inherited_fields: dict[str, dict[str, IRType]] | None = None,
+) -> PassPipeline:
     """A pipeline of the bundled passes for *target*."""
-    return PassPipeline(default_passes(), target=target)
+    return PassPipeline(default_passes(inherited_fields), target=target)

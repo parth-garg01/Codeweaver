@@ -23,7 +23,7 @@ backend generate confidently incorrect code.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.base import IRNode, walk
@@ -105,21 +105,35 @@ def _propagate_function(
     return replace(function, body=body)
 
 
-def _propagate_class(klass: IRClass, bag: DiagnosticBag | None) -> IRClass:
-    fields = {item.name: item.field_type for item in klass.fields if _is_known(item.field_type)}
+def _propagate_class(
+    klass: IRClass,
+    bag: DiagnosticBag | None,
+    inherited: dict[str, IRType] | None = None,
+) -> IRClass:
+    fields = {name: declared for name, declared in (inherited or {}).items() if _is_known(declared)}
+    fields.update(
+        {item.name: item.field_type for item in klass.fields if _is_known(item.field_type)}
+    )
     methods = [_propagate_function(method, fields, bag) for method in klass.methods]
     if all(new is old for new, old in zip(methods, klass.methods, strict=True)):
         return klass
     return replace(klass, methods=methods)
 
 
-def propagate_types(module: IRModule, bag: DiagnosticBag | None = None) -> IRModule:
+def propagate_types(
+    module: IRModule,
+    bag: DiagnosticBag | None = None,
+    inherited_fields: dict[str, dict[str, IRType]] | None = None,
+) -> IRModule:
     """Return *module* with declared types copied onto matching references."""
+    inherited_fields = inherited_fields or {}
     module_scope = scope_types(module, bag)
     rewriter = _annotate(module_scope, {}, "")
     body = [rewrite(statement, rewriter) for statement in module.body]  # type: ignore[arg-type]
     functions = [_propagate_function(function, {}, bag) for function in module.functions]
-    classes = [_propagate_class(klass, bag) for klass in module.classes]
+    classes = [
+        _propagate_class(klass, bag, inherited_fields.get(klass.name)) for klass in module.classes
+    ]
     return replace(module, body=body, functions=functions, classes=classes)
 
 
@@ -127,6 +141,7 @@ def propagate_types(module: IRModule, bag: DiagnosticBag | None = None) -> IRMod
 class TypePropagationPass:
     """Transform pass wrapper for :func:`propagate_types`."""
 
+    inherited_fields: dict[str, dict[str, IRType]] = field(default_factory=dict)
     name: str = "propagate-declared-types"
     description: str = "Copy declared parameter, variable and field types onto references"
     targets: tuple[str, ...] = ()
@@ -135,4 +150,4 @@ class TypePropagationPass:
         return bool(module.functions or module.classes or module.body)
 
     def run(self, module: IRModule, bag: DiagnosticBag) -> IRModule:
-        return propagate_types(module, bag)
+        return propagate_types(module, bag, self.inherited_fields)
