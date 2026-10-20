@@ -294,3 +294,33 @@ class MigrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClassConstructionIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self._tmp.name) / "out"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_constructing_a_project_class_uses_new(self) -> None:
+        source = Path(self._tmp.name) / "src"
+        (source / "pkg").mkdir(parents=True)
+        (source / "pkg" / "models.py").write_text(
+            "class Account:\n"
+            "    def __init__(self, owner: str) -> None:\n"
+            "        self.owner = owner\n",
+            encoding="utf-8",
+        )
+        (source / "pkg" / "factory.py").write_text(
+            "from pkg.models import Account\n"
+            "\n"
+            "\n"
+            "def make(owner: str) -> Account:\n"
+            "    return Account(owner)\n",
+            encoding="utf-8",
+        )
+        run_migration(source, self.out, NO_VALIDATION)
+        contents = (self.out / "pkg" / "factory.ts").read_text(encoding="utf-8")
+        self.assertIn("return new Account(owner);", contents)

@@ -23,7 +23,7 @@ from codeweaver.backends.typescript.naming import (
     safe_identifier,
     safe_property,
 )
-from codeweaver.ir.base import IRNode, IRUnsupported
+from codeweaver.ir.base import CONSTRUCTS_CLASS, IRNode, IRUnsupported
 from codeweaver.ir.expressions import (
     IRArrayLiteral,
     IRAttribute,
@@ -261,6 +261,9 @@ def _call(node: IRCall, ctx: EmitContext) -> Emitted:
     if builtin is not None:
         return Emitted(builtin, _MEMBER)
     callee = emit_expression(node.callee, ctx).at_least(_MEMBER)
+    if node.meta.get(CONSTRUCTS_CLASS):
+        # Python calls a class to construct it; TypeScript needs `new`.
+        callee = f"new {callee}"
     arguments.extend(f"...{emit_expression(item, ctx).at_least(_UNARY)}" for item in node.star_args)
     if node.keywords:
         entries = ", ".join(

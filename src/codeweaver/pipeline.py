@@ -40,6 +40,7 @@ from codeweaver.project_intake.paths import normalise_root
 from codeweaver.project_intake.scanner import ScanOptions, ScanResult, scan_project
 from codeweaver.reporting import FileCounts, MigrationReport
 from codeweaver.transforms import default_pipeline
+from codeweaver.transforms.construction import ClassConstructionPass
 from codeweaver.validation import ExecutionPolicy, detect_toolchains, validate_project
 
 __all__ = [
@@ -274,7 +275,12 @@ def run_migration(
     applied: list[str] = []
     skipped: list[str] = []
     for module in analysis.modules:
-        result = default_pipeline(options.target).run(module, analysis.diagnostics)
+        # The construction pass needs project-wide knowledge, so it is built
+        # per module from the symbol index rather than bundled with the
+        # module-local default passes.
+        pipeline = default_pipeline(options.target)
+        pipeline.passes.insert(0, ClassConstructionPass.for_module(module, analysis.graph.symbols))
+        result = pipeline.run(module, analysis.diagnostics)
         transformed.append(result.module)
         for name in result.applied_passes:
             if name not in applied:
