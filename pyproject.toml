@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeweaver"
+version = "0.1.0"
+description = "Local-first, LLM-free code migration through a shared intermediate representation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Parth Garg" }]
+keywords = ["migration", "transpiler", "intermediate-representation", "local-first"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Code Generators",
+]
+
+# CodeWeaver's runtime deliberately has no third-party dependencies: every
+# stage (parse, IR, graph, codegen, validation, UI) runs on the standard
+# library so that the tool works offline with no account and no API key.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6", "mypy>=1.10"]
+
+[project.urls]
+Homepage = "https://github.com/parth-garg01/Codeweaver"
+Issues = "https://github.com/parth-garg01/Codeweaver/issues"
+
+[project.scripts]
+codeweaver = "codeweaver.cli.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codeweaver = ["ui/static/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RET", "PTH", "ARG", "TID"]
+ignore = [
+  "E501",   # line length is enforced by the formatter
+  "SIM108", # ternaries are not always clearer in codegen branches
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/fixtures/**" = ["ALL"]
+"tests/**" = ["ARG"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+disallow_untyped_defs = false
+exclude = ["tests/fixtures"]
