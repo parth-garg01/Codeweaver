@@ -133,7 +133,7 @@ class ExceptionEmitTests(StatementEmitTestCase):
         rendered = self.emit("try:\n    f()\nexcept ValueError as exc:\n    g(exc)")
         self.assertIn("try {", rendered)
         self.assertIn("} catch (error) {", rendered)
-        self.assertIn("if (error instanceof ValueError) {", rendered)
+        self.assertIn("if (error instanceof Error) {", rendered)
         self.assertIn("const exc = error;", rendered)
         self.assertIn("throw error;", rendered)
 
@@ -166,11 +166,11 @@ class ExceptionEmitTests(StatementEmitTestCase):
         self.assertIn("CW0626", self.codes())
 
     def test_raise(self) -> None:
-        self.assertEqual(self.emit("raise ValueError('x')"), 'throw ValueError("x");\n')
+        self.assertEqual(self.emit("raise MyError('x')"), 'throw new MyError("x");\n')
 
     def test_raise_from_attaches_a_cause(self) -> None:
         rendered = self.emit("raise A() from b")
-        self.assertIn("Object.assign(A(), { cause: b })", rendered)
+        self.assertIn("Object.assign(new A(), { cause: b })", rendered)
         self.assertIn("CW0625", self.codes())
 
     def test_bare_raise_is_reported(self) -> None:
