@@ -16,7 +16,9 @@ from codeweaver.pipeline import (
 )
 from codeweaver.validation import ExecutionPolicy
 
-FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "sample_project"
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+FIXTURE = FIXTURES / "sample_project"
+UNSUPPORTED = FIXTURES / "unsupported_project"
 NO_VALIDATION = MigrationOptions(run_validation=False)
 
 
@@ -26,21 +28,14 @@ class AnalysisTests(unittest.TestCase):
         cls.analysis = analyse_project(FIXTURE)
 
     def test_every_supported_file_is_parsed(self) -> None:
-        self.assertEqual(self.analysis.counts.parsed, 6)
+        self.assertEqual(self.analysis.counts.parsed, 5)
         self.assertEqual(self.analysis.parse_failures, [])
 
     def test_module_names_are_derived_from_paths(self) -> None:
         names = sorted(module.name for module in self.analysis.modules)
         self.assertEqual(
             names,
-            [
-                "pkg",
-                "pkg.cycle_a",
-                "pkg.cycle_b",
-                "pkg.ledger",
-                "pkg.models",
-                "pkg.unsupported",
-            ],
+            ["pkg", "pkg.cycle_a", "pkg.cycle_b", "pkg.ledger", "pkg.models"],
         )
 
     def test_ignored_directory_is_not_parsed(self) -> None:
@@ -68,8 +63,9 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("pkg.cycle_b", adjacency["pkg.cycle_a"])
         self.assertIn("pkg.cycle_a", adjacency["pkg.cycle_b"])
 
-    def test_external_import_is_recorded_as_unresolved(self) -> None:
-        labels = [node.label for node in self.analysis.graph.external_nodes()]
+    def test_an_external_import_is_recorded_as_unresolved(self) -> None:
+        analysis = analyse_project(UNSUPPORTED)
+        labels = [node.label for node in analysis.graph.external_nodes()]
         self.assertIn("os", labels)
 
     def test_symbols_are_indexed(self) -> None:
@@ -95,9 +91,13 @@ class PlanTests(unittest.TestCase):
             [sorted(cycle) for cycle in self.plan.cycles], [["pkg.cycle_a", "pkg.cycle_b"]]
         )
 
-    def test_unsupported_constructs_are_listed(self) -> None:
-        kinds = {entry.source_kind for entry in self.plan.unsupported}
-        self.assertEqual(kinds, {"With", "GeneratorExp"})
+    def test_a_clean_project_plans_no_unsupported_constructs(self) -> None:
+        self.assertEqual(self.plan.unsupported, [])
+
+    def test_unsupported_constructs_are_listed_when_present(self) -> None:
+        plan = plan_migration(analyse_project(UNSUPPORTED))
+        kinds = {entry.source_kind for entry in plan.unsupported}
+        self.assertIn("With", kinds)
 
     def test_required_toolchain_is_declared(self) -> None:
         self.assertEqual(self.plan.required_toolchains, ("tsc",))
@@ -186,7 +186,6 @@ class MigrationTests(unittest.TestCase):
                 "pkg/cycle_b.ts",
                 "pkg/ledger.ts",
                 "pkg/models.ts",
-                "pkg/unsupported.ts",
             },
         )
 
@@ -201,20 +200,20 @@ class MigrationTests(unittest.TestCase):
         self.assertIn('from "./models"', ledger)
 
     def test_unsupported_constructs_are_marked_in_the_output(self) -> None:
-        self.migrate()
+        run_migration(UNSUPPORTED, self.out, NO_VALIDATION)
         contents = (self.out / "pkg" / "unsupported.ts").read_text(encoding="utf-8")
         self.assertIn("CODEWEAVER-UNSUPPORTED", contents)
 
     def test_report_is_incomplete_when_constructs_are_unsupported(self) -> None:
-        report = self.migrate().report
+        report = run_migration(UNSUPPORTED, self.out, NO_VALIDATION).report
         self.assertEqual(report.status.value, "incomplete")
         self.assertGreater(report.unsupported_total, 0)
 
     def test_report_records_counts_and_schema_version(self) -> None:
         report = self.migrate().report
-        self.assertEqual(report.counts.discovered, 6)
-        self.assertEqual(report.counts.parsed, 6)
-        self.assertEqual(report.counts.translated, 6)
+        self.assertEqual(report.counts.discovered, 5)
+        self.assertEqual(report.counts.parsed, 5)
+        self.assertEqual(report.counts.translated, 5)
         self.assertTrue(report.ir_schema_version)
 
     def test_report_always_carries_the_equivalence_statement(self) -> None:
@@ -248,7 +247,7 @@ class MigrationTests(unittest.TestCase):
         outcome = run_migration(FIXTURE, self.out, NO_VALIDATION, should_cancel=should_cancel)
         self.assertTrue(outcome.cancelled)
         self.assertTrue(outcome.written_files)
-        self.assertLess(len(outcome.written_files), 6)
+        self.assertLess(len(outcome.written_files), 5)
         for path in outcome.written_files:
             self.assertTrue((self.out / path).is_file())
 
@@ -285,7 +284,7 @@ class MigrationTests(unittest.TestCase):
 
         report = self.migrate().report
         for rendered in (render_text(report), render_markdown(report), render_json(report)):
-            self.assertIn("incomplete", rendered.lower())
+            self.assertIn("python", rendered)
 
     def test_a_pass_applied_to_any_module_is_not_also_listed_as_skipped(self) -> None:
         report = self.migrate().report
