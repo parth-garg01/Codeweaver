@@ -105,7 +105,14 @@ else
   fi
 fi
 
-bold "5. summary"
+bold "5. privacy audit"
+run "no outbound network in core flows" "$PY" -m unittest \
+  tests.security.test_no_network -q
+run "no AI or HTTP runtime dependency" "$PY" -m unittest \
+  tests.security.test_no_network.NoAiDependencyAudit -q
+run "no secrets in tracked files" "$PY" scripts/check_secrets.py
+
+bold "6. summary"
 printf '  %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 if [ "$FAIL" -gt 0 ]; then
   echo
