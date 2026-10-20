@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sanity:
+    name: sanity check (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dev tooling
+        # CodeWeaver's runtime has no third-party dependencies; only the dev
+        # extra is installed, so a missing-dependency failure here would be a
+        # real regression rather than an environment problem.
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+
+      - name: Set up Node and TypeScript
+        # tsc is what validates generated output. Without it the suite still
+        # passes, but the end-to-end validation tests report themselves as
+        # skipped rather than silently not running.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install TypeScript
+        run: npm install --global typescript@5.8.2
+
+      - name: Report tool versions
+        run: |
+          python --version
+          node --version
+          tsc --version
+
+      - name: Run the sanity-check suite
+        run: ./scripts/sanity-check

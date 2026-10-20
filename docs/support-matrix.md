@@ -7,6 +7,12 @@ parsing, IR mapping, code generation and target-toolchain validation.
 | ------ | ------ | ------ | ----- |
 | Python 3.11+ | TypeScript 5 | partial | Documented construct subset. Unsupported constructs are reported, never approximated. |
 
+The generated project is checked with `tsc --noEmit` under `strict`. The one
+strictness option left off is `noUncheckedIndexedAccess`: it models a language
+where `xs[i]` may be `undefined`, whereas Python raises `IndexError`, so
+enabling it would flag every faithful index expression. Turning it on is a
+reasonable step for a human hardening the output.
+
 `partial` is not a softer word for `supported`: it means a deliberately scoped
 set of constructs is translated and everything else produces an explicit
 diagnostic plus a marker in the generated source.
@@ -29,6 +35,14 @@ adapters themselves rather than from this document.
 - Chained comparisons, conditional expressions, lambdas
 - Calls, attribute access, indexing, slicing without a step
 - `list`, `tuple`, `set` and `dict` literals; f-strings without format specs
+- Single-clause list, set and dict comprehensions, generated as
+  `.filter(...).map(...)` chains
+- Builtins with a faithful counterpart: `len`, `print`, `str`, `int`, `float`,
+  `bool`, `abs`, `round`, `list`, `tuple`, `set`, `sum`, `sorted`,
+  `isinstance`, `min`, `max`
+- Builtin exceptions mapped onto JavaScript error constructors, with `new` at
+  every `raise` site
+- Instance fields that Python only ever assigns, declared on the class
 - `if`/`elif`/`else`, `while`, `for ... in ...`, `break`, `continue`
 - `try`/`except`/`else`/`finally`, `raise`, `raise ... from ...`, `assert`
 
@@ -52,6 +66,9 @@ the generated file:
 | `a @ b` | No matrix-multiply operator |
 | Stepped slices `xs[::2]` | No equivalent slice form |
 | `del x` on a binding | No equivalent |
+| `enumerate`, `zip`, `map`, `filter`, `reversed`, `iter`, `next` | Depend on Python's iterator protocol |
+| `getattr` / `setattr` / `hasattr` | Dynamic attribute access is not modelled |
+| `eval` / `exec` | Dynamic evaluation is deliberately never generated |
 
 ### Behaviour differences the report always flags
 
@@ -69,3 +86,13 @@ occurrence, because a passing `tsc` run does not make them safe:
 - **Membership tests** (`x in xs`) assume an array or string unless the
   container's type is known.
 - **Multiple inheritance** keeps only the first base class.
+- **`ValueError`, `KeyError`, `RuntimeError` and friends** all become `Error`,
+  so a `catch` can no longer tell them apart.
+- **A class extending a builtin exception** extends `Error` instead, so the
+  hierarchy above it differs.
+- **`sorted()`** becomes `[...xs].sort()`, which compares elements as strings
+  unless a comparator is supplied.
+- **`int()`** truncates toward zero and accepts inputs Python's `int()` rejects.
+- **`round()`** rounds halves up; Python rounds halves to even.
+- **`isinstance(x, int)`** becomes a `typeof number` test and cannot tell
+  integers from floats.
