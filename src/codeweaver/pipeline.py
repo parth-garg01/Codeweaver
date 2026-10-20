@@ -41,6 +41,7 @@ from codeweaver.project_intake.scanner import ScanOptions, ScanResult, scan_proj
 from codeweaver.reporting import FileCounts, MigrationReport
 from codeweaver.transforms import default_pipeline
 from codeweaver.transforms.construction import ClassConstructionPass
+from codeweaver.transforms.inheritance import collect_inherited_fields
 from codeweaver.validation import ExecutionPolicy, detect_toolchains, validate_project
 
 __all__ = [
@@ -274,11 +275,12 @@ def run_migration(
     transformed: list[IRModule] = []
     applied: list[str] = []
     skipped: list[str] = []
+    inherited_fields = collect_inherited_fields(analysis.modules)
     for module in analysis.modules:
         # The construction pass needs project-wide knowledge, so it is built
         # per module from the symbol index rather than bundled with the
         # module-local default passes.
-        pipeline = default_pipeline(options.target)
+        pipeline = default_pipeline(options.target, inherited_fields=inherited_fields)
         pipeline.passes.insert(0, ClassConstructionPass.for_module(module, analysis.graph.symbols))
         result = pipeline.run(module, analysis.diagnostics)
         transformed.append(result.module)

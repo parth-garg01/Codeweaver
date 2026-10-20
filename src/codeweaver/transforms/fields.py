@@ -23,7 +23,7 @@ a sign the original relied on it being optional.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.base import walk
@@ -32,7 +32,7 @@ from codeweaver.ir.expressions import IRAttribute, IRName
 from codeweaver.ir.statements import IRAssign, IRAugAssign
 from codeweaver.ir.types import IRType, TypeKind, t_unknown
 
-__all__ = ["InferFieldsPass", "infer_instance_fields"]
+__all__ = ["InferFieldsPass", "assigned_attribute_types", "infer_instance_fields"]
 
 
 def _is_known(ir_type: IRType | None) -> bool:
@@ -67,8 +67,37 @@ def _infer_type(value, by_param: dict[str, IRType]) -> IRType:
     return observed if _is_known(observed) else t_unknown()
 
 
-def _infer_for_class(klass: IRClass, bag: DiagnosticBag | None) -> IRClass:
-    declared = {item.name for item in klass.fields}
+def assigned_attribute_types(klass: IRClass) -> dict[str, IRType]:
+    """Attribute names a class assigns to its receiver, with inferred types.
+
+    This is what :func:`infer_instance_fields` would declare, computed without
+    rewriting anything, so project-wide analysis can take a subclass's
+    *effective* inherited fields into account before the pass has run.
+    """
+    constructor = klass.constructor
+    ordered = (
+        [constructor, *[m for m in klass.methods if m is not constructor]]
+        if constructor is not None
+        else list(klass.methods)
+    )
+    found: dict[str, IRType] = {}
+    for method in ordered:
+        for name, inferred in _assigned_attributes(method):
+            existing = found.get(name)
+            if existing is None or not _is_known(existing):
+                found[name] = inferred
+    return found
+
+
+def _infer_for_class(
+    klass: IRClass,
+    bag: DiagnosticBag | None,
+    inherited: dict[str, IRType] | None = None,
+) -> IRClass:
+    # A field a base class declares must not be re-declared here: in Python the
+    # subclass is using the inherited attribute, and re-declaring it in a
+    # class-based target is a type error.
+    declared = {item.name for item in klass.fields} | set(inherited or {})
     constructor = klass.constructor
     added: list[IRField] = []
     seen: dict[str, IRType] = {}
@@ -111,9 +140,16 @@ def _infer_for_class(klass: IRClass, bag: DiagnosticBag | None) -> IRClass:
     return replace(klass, fields=[*klass.fields, *added])
 
 
-def infer_instance_fields(module: IRModule, bag: DiagnosticBag | None = None) -> IRModule:
+def infer_instance_fields(
+    module: IRModule,
+    bag: DiagnosticBag | None = None,
+    inherited_fields: dict[str, dict[str, IRType]] | None = None,
+) -> IRModule:
     """Return *module* with assigned-only instance fields declared."""
-    classes = [_infer_for_class(klass, bag) for klass in module.classes]
+    inherited_fields = inherited_fields or {}
+    classes = [
+        _infer_for_class(klass, bag, inherited_fields.get(klass.name)) for klass in module.classes
+    ]
     if all(new is old for new, old in zip(classes, module.classes, strict=True)):
         return module
     return replace(module, classes=classes)
@@ -121,8 +157,13 @@ def infer_instance_fields(module: IRModule, bag: DiagnosticBag | None = None) ->
 
 @dataclass
 class InferFieldsPass:
-    """Transform pass wrapper for :func:`infer_instance_fields`."""
+    """Transform pass wrapper for :func:`infer_instance_fields`.
 
+    ``inherited_fields`` comes from project-wide analysis; without it the pass
+    still runs, but a subclass may re-declare a base class's field.
+    """
+
+    inherited_fields: dict[str, dict[str, IRType]] = field(default_factory=dict)
     name: str = "infer-instance-fields"
     description: str = "Declare instance fields that are only ever assigned"
     targets: tuple[str, ...] = ()
@@ -133,4 +174,4 @@ class InferFieldsPass:
         )
 
     def run(self, module: IRModule, bag: DiagnosticBag) -> IRModule:
-        return infer_instance_fields(module, bag)
+        return infer_instance_fields(module, bag, self.inherited_fields)
