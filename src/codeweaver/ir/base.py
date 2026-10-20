@@ -48,14 +48,19 @@ class IRNode:
     span: SourceSpan | None = field(default=None, kw_only=True)
     meta: dict[str, Any] = field(default_factory=dict, kw_only=True)
 
-    def fields(self) -> list[dataclasses.Field[Any]]:
-        """Payload fields, excluding ``span`` and ``meta``."""
+    def payload_fields(self) -> list[dataclasses.Field[Any]]:
+        """Declared fields other than ``span`` and ``meta``.
+
+        Named ``payload_fields`` rather than ``fields`` so that a node is free
+        to declare a data field called ``fields`` (as :class:`IRClass` does)
+        without shadowing the traversal API.
+        """
         return [f for f in dataclasses.fields(self) if f.name not in ("span", "meta")]
 
     def children(self) -> list[IRNode]:
         """Direct child nodes, in declaration order."""
         found: list[IRNode] = []
-        for info in self.fields():
+        for info in self.payload_fields():
             value = getattr(self, info.name)
             if isinstance(value, IRNode):
                 found.append(value)
@@ -65,7 +70,7 @@ class IRNode:
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"kind": self.kind}
-        for info in self.fields():
+        for info in self.payload_fields():
             payload[info.name] = encode_value(getattr(self, info.name))
         if self.span is not None:
             payload["span"] = self.span.to_dict()
