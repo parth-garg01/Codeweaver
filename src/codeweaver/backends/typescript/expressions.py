@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from codeweaver.backends.typescript.builtins import map_builtin_call
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.naming import (
     escape_string,
@@ -255,8 +256,11 @@ def _call(node: IRCall, ctx: EmitContext) -> Emitted:
     ):
         arguments = ", ".join(emit_expression(item, ctx).text for item in node.args)
         return Emitted(f"super({arguments})", _MEMBER)
-    callee = emit_expression(node.callee, ctx).at_least(_MEMBER)
     arguments = [emit_expression(argument, ctx).text for argument in node.args]
+    builtin = map_builtin_call(node, arguments, ctx)
+    if builtin is not None:
+        return Emitted(builtin, _MEMBER)
+    callee = emit_expression(node.callee, ctx).at_least(_MEMBER)
     arguments.extend(f"...{emit_expression(item, ctx).at_least(_UNARY)}" for item in node.star_args)
     if node.keywords:
         entries = ", ".join(

@@ -66,7 +66,7 @@ class ComprehensionEmitTests(unittest.TestCase):
         self.assertEqual(self.ctx.gaps, [])
 
     def test_comprehension_is_usable_as_a_call_argument(self) -> None:
-        self.assertEqual(self.emit("sum([x for x in xs])"), "sum([...xs])")
+        self.assertEqual(self.emit("collect([x for x in xs])"), "collect([...xs])")
 
 
 if __name__ == "__main__":
