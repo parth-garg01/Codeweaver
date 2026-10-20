@@ -1,10 +1,17 @@
 """The TypeScript target backend and the project files it scaffolds.
 
 The generated output is a standalone TypeScript project: sources plus a
-``tsconfig.json`` and a ``package.json``.  Both are written with `strict` type
+``tsconfig.json`` and a ``package.json``.  Both are written with ``strict`` type
 checking on, because the point of validating with ``tsc`` is to find the places
 where the translation lost information, and a loose configuration would hide
 exactly those places.
+
+``noUncheckedIndexedAccess`` is the one strictness option left off.  It models
+a language where ``xs[i]`` may be ``undefined``; Python raises ``IndexError``
+instead, so translated code never relies on that possibility, and turning the
+option on would flag every faithful index expression. Enabling it is a
+reasonable follow-up for a human hardening the output, which is why
+:meth:`render_tsconfig` leaves the rest of ``strict`` intact.
 """
 
 from __future__ import annotations
@@ -31,7 +38,7 @@ _TSCONFIG: dict[str, Any] = {
         "moduleResolution": "bundler",
         "strict": True,
         "noImplicitAny": True,
-        "noUncheckedIndexedAccess": True,
+        "noUncheckedIndexedAccess": False,
         "forceConsistentCasingInFileNames": True,
         "skipLibCheck": True,
         "noEmit": True,
@@ -48,7 +55,6 @@ def render_tsconfig(*, strict: bool = True) -> str:
     if not strict:
         config["compilerOptions"]["strict"] = False
         config["compilerOptions"]["noImplicitAny"] = False
-        config["compilerOptions"]["noUncheckedIndexedAccess"] = False
     return json.dumps(config, indent=2, sort_keys=True) + "\n"
 
 

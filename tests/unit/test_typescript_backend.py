@@ -137,3 +137,14 @@ class RegistrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IndexAccessStrictnessTests(unittest.TestCase):
+    def test_unchecked_indexed_access_is_off_with_a_documented_reason(self) -> None:
+        options = json.loads(render_tsconfig())["compilerOptions"]
+        self.assertTrue(options["strict"])
+        self.assertFalse(options["noUncheckedIndexedAccess"])
+
+    def test_relaxed_mode_keeps_it_off_too(self) -> None:
+        options = json.loads(render_tsconfig(strict=False))["compilerOptions"]
+        self.assertFalse(options["noUncheckedIndexedAccess"])

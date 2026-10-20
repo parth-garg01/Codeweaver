@@ -59,6 +59,20 @@ class SourceMapIndex:
             index.entries[output_path] = table
         return index
 
+    def _table_for_suffix(self, output_path: str) -> dict[int, tuple[str, int]] | None:
+        """Match a path a compiler reported differently from the key we stored.
+
+        Compilers normalise paths in their own way, so an absolute or
+        dot-prefixed path can refer to a file we recorded relatively.  Matching
+        on the path suffix recovers the mapping instead of losing the link back
+        to the original source.
+        """
+        normalised = output_path.replace("\\", "/")
+        for key, table in self.entries.items():
+            if normalised.endswith(f"/{key}") or key.endswith(f"/{normalised}"):
+                return table
+        return None
+
     def resolve(self, output_path: str, output_line: int) -> tuple[str, int] | None:
         """The source position for *output_line*, or the nearest one above it.
 
@@ -68,6 +82,8 @@ class SourceMapIndex:
         position a reader wants.
         """
         table = self.entries.get(output_path)
+        if table is None:
+            table = self._table_for_suffix(output_path)
         if not table:
             return None
         for candidate in range(output_line, 0, -1):
@@ -160,7 +176,9 @@ def run_typecheck(
             "install TypeScript to type-check generated output",
         )
 
-    command = [tool.path, "--noEmit", "--pretty", "false", "--project", str(config)]
+    # A relative --project keeps tsc's reported paths relative to the output
+    # directory, which is what the mapping metadata is keyed by.
+    command = [tool.path, "--noEmit", "--pretty", "false", "--project", config.name]
     started = time.monotonic()
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell

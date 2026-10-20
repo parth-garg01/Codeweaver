@@ -175,3 +175,18 @@ class RunTypecheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceMapSuffixTests(unittest.TestCase):
+    def test_absolute_reported_path_matches_a_relative_mapping(self) -> None:
+        index = SourceMapIndex.from_mappings(
+            {"pkg/a.ts": [{"outputLine": 3, "sourceFile": "pkg/a.py", "sourceLine": 2}]}
+        )
+        resolved = index.resolve("/tmp/build/pkg/a.ts", 3)
+        self.assertEqual(resolved, ("pkg/a.py", 2))
+
+    def test_unrelated_path_still_does_not_resolve(self) -> None:
+        index = SourceMapIndex.from_mappings(
+            {"pkg/a.ts": [{"outputLine": 3, "sourceFile": "pkg/a.py", "sourceLine": 2}]}
+        )
+        self.assertIsNone(index.resolve("/tmp/build/other/b.ts", 3))
