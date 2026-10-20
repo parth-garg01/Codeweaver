@@ -205,11 +205,11 @@ class ClassTests(unittest.TestCase):
 class UnsupportedReportingTests(unittest.TestCase):
     def test_unsupported_constructs_are_listed_on_the_module(self) -> None:
         module = parse(
-            "def f(xs):\n    return [x for x in xs]\n\n"
+            "def f(xs):\n    return (x for x in xs)\n\n"
             "def g():\n    with open('f') as h:\n        pass\n"
         ).module
         kinds = sorted(node.source_kind for node in module.unsupported_nodes())
-        self.assertEqual(kinds, ["ListComp", "With"])
+        self.assertEqual(kinds, ["GeneratorExp", "With"])
 
     def test_module_with_no_gaps_reports_none(self) -> None:
         module = parse("def f(a):\n    return a\n").module

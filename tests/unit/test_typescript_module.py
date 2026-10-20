@@ -234,7 +234,7 @@ class ClassEmitTests(unittest.TestCase):
 
 class GapTrackingTests(unittest.TestCase):
     def test_unsupported_constructs_are_counted_and_marked(self) -> None:
-        generated = generate("def f(xs):\n    return [x for x in xs]\n")
+        generated = generate("def f(xs):\n    return (x for x in xs)\n")
         self.assertEqual(generated.unsupported_count, 1)
         self.assertIn("CODEWEAVER-UNSUPPORTED", generated.contents)
 

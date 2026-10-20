@@ -11,6 +11,7 @@ from codeweaver.ir.types import IRType, t_unknown
 
 __all__ = [
     "IRArrayLiteral",
+    "IRComprehension",
     "IRAttribute",
     "IRAwait",
     "IRBinary",
@@ -266,3 +267,28 @@ class IRAwait(IRExpression):
     kind: ClassVar[str] = "await"
 
     operand: IRExpression
+
+
+@ir_node
+@dataclass
+class IRComprehension(IRExpression):
+    """A single-clause comprehension.
+
+    Only the shape every target can express is modelled: one iteration clause
+    over a named binding with an optional filter.  Nested clauses, multiple
+    ``if`` guards and ``async for`` are reported as unsupported by the frontend
+    rather than squeezed into this node, because flattening them would change
+    evaluation order.
+
+    ``form`` is ``"list"``, ``"set"`` or ``"dict"``.  For a dict comprehension
+    ``key`` holds the key expression and ``element`` holds the value.
+    """
+
+    kind: ClassVar[str] = "comprehension"
+
+    form: str
+    target: str
+    iterable: IRExpression
+    element: IRExpression
+    key: IRExpression | None = None
+    condition: IRExpression | None = None
