@@ -1,1 +1,249 @@
-<!doctype html><title>CodeWeaver</title>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeWeaver</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__identity">
+        <span class="mark" aria-hidden="true"></span>
+        <h1>CodeWeaver</h1>
+        <span class="topbar__note">local-first &middot; no model calls</span>
+      </div>
+      <div class="topbar__state">
+        <span id="project-label" class="path path--muted">no project selected</span>
+        <span id="status-chip" class="chip chip--idle">idle</span>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Workflow">
+      <button class="tab" data-view="project" aria-current="page">Project</button>
+      <button class="tab" data-view="overview" disabled>Overview</button>
+      <button class="tab" data-view="dependencies" disabled>Dependencies</button>
+      <button class="tab" data-view="plan" disabled>Plan</button>
+      <button class="tab" data-view="output" disabled>Output</button>
+      <button class="tab" data-view="validation" disabled>Validation</button>
+      <button class="tab" data-view="settings">Settings</button>
+    </nav>
+
+    <main>
+      <section id="view-project" class="view view--active" aria-labelledby="project-heading">
+        <h2 id="project-heading">Select a local project</h2>
+        <p class="lede">
+          CodeWeaver reads the directory you name, parses it locally and writes the
+          generated project somewhere else. Nothing is uploaded.
+        </p>
+        <form id="project-form" class="form">
+          <label class="field">
+            <span class="field__label">Project directory</span>
+            <input
+              id="project-input"
+              class="field__input"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="/path/to/your/project"
+              required
+            />
+            <span class="field__hint">An absolute path on this machine.</span>
+          </label>
+          <div class="form__row">
+            <label class="field field--inline">
+              <span class="field__label">Source</span>
+              <select id="source-select" class="field__input"></select>
+            </label>
+            <label class="field field--inline">
+              <span class="field__label">Target</span>
+              <select id="target-select" class="field__input"></select>
+            </label>
+          </div>
+          <div class="form__actions">
+            <button class="button button--primary" type="submit">Scan project</button>
+          </div>
+        </form>
+        <div id="project-error" class="notice notice--error" hidden></div>
+
+        <h3>Supported pairs</h3>
+        <table class="table" id="pairs-table">
+          <thead>
+            <tr><th>Source</th><th>Target</th><th>Support</th><th>Notes</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="footnote">
+          A <code>partial</code> pair translates a documented subset of constructs.
+          Everything else is reported, never approximated.
+        </p>
+      </section>
+
+      <section id="view-overview" class="view" aria-labelledby="overview-heading">
+        <h2 id="overview-heading">Project overview</h2>
+        <div class="stats" id="overview-stats"></div>
+        <div class="split">
+          <div class="panel">
+            <h3>Modules</h3>
+            <table class="table table--compact" id="modules-table">
+              <thead>
+                <tr><th>Module</th><th>Path</th><th class="num">Fn</th><th class="num">Cls</th><th class="num">Gaps</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="panel">
+            <h3>Skipped paths</h3>
+            <table class="table table--compact" id="skipped-table">
+              <thead><tr><th>Path</th><th>Reason</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <h3>Manifests</h3>
+            <ul class="list" id="manifests-list"></ul>
+          </div>
+        </div>
+        <h3>Diagnostics</h3>
+        <div id="overview-diagnostics" class="diagnostics"></div>
+      </section>
+
+      <section id="view-dependencies" class="view" aria-labelledby="dependencies-heading">
+        <h2 id="dependencies-heading">Dependency explorer</h2>
+        <div class="toolbar">
+          <label class="field field--inline">
+            <span class="field__label">Filter</span>
+            <input id="graph-search" class="field__input" type="search" placeholder="module or symbol" />
+          </label>
+          <fieldset class="checks">
+            <legend class="field__label">Edge kinds</legend>
+            <label><input type="checkbox" class="edge-filter" value="import" checked /> import</label>
+            <label><input type="checkbox" class="edge-filter" value="call" checked /> call</label>
+            <label><input type="checkbox" class="edge-filter" value="inherit" checked /> inherit</label>
+            <label><input type="checkbox" class="edge-filter" value="type" checked /> type</label>
+            <label><input type="checkbox" id="unresolved-filter" checked /> unresolved</label>
+          </fieldset>
+        </div>
+        <div class="split split--graph">
+          <div class="panel panel--graph">
+            <h3>Module graph</h3>
+            <div id="graph-canvas" class="graph" role="img" aria-label="Module dependency graph"></div>
+            <p class="footnote" id="graph-legend"></p>
+          </div>
+          <div class="panel">
+            <h3>Nodes</h3>
+            <table class="table table--compact" id="nodes-table">
+              <thead><tr><th>Node</th><th>Kind</th><th class="num">In</th><th class="num">Out</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel" id="node-detail" hidden>
+          <h3 id="node-detail-title">Node</h3>
+          <div id="node-detail-body"></div>
+        </div>
+      </section>
+
+      <section id="view-plan" class="view" aria-labelledby="plan-heading">
+        <h2 id="plan-heading">Migration plan</h2>
+        <p class="lede" id="plan-summary"></p>
+        <div id="plan-toolchain" class="notice" hidden></div>
+        <h3>Groups</h3>
+        <table class="table" id="plan-table">
+          <thead>
+            <tr><th class="num">#</th><th>Modules</th><th>Risk</th><th>Why</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <h3>Unsupported constructs</h3>
+        <table class="table" id="unsupported-table">
+          <thead>
+            <tr><th>Construct</th><th class="num">Count</th><th>Reason</th><th>Where</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <h3>Generate</h3>
+        <form id="migrate-form" class="form">
+          <label class="field">
+            <span class="field__label">Output directory</span>
+            <input
+              id="output-input"
+              class="field__input"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="/path/to/output"
+              required
+            />
+            <span class="field__hint">Must be outside the source project. Existing files are never silently replaced.</span>
+          </label>
+          <div class="form__row">
+            <label class="check"><input id="overwrite-check" type="checkbox" /> Replace files in a non-empty directory</label>
+            <label class="check"><input id="validate-check" type="checkbox" checked /> Run target type checks after generating</label>
+          </div>
+          <div class="form__actions">
+            <button class="button button--primary" type="submit" id="migrate-button">Generate target project</button>
+            <span class="footnote">Review the plan above first.</span>
+          </div>
+        </form>
+        <div id="plan-error" class="notice notice--error" hidden></div>
+      </section>
+
+      <section id="view-output" class="view" aria-labelledby="output-heading">
+        <h2 id="output-heading">Generated output</h2>
+        <p class="lede" id="output-summary"></p>
+        <div class="split split--files">
+          <div class="panel">
+            <h3>Files</h3>
+            <ul class="filelist" id="file-list"></ul>
+          </div>
+          <div class="panel panel--code">
+            <h3 id="code-title">Select a file</h3>
+            <div id="code-flags"></div>
+            <pre class="code"><code id="code-body"></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-validation" class="view" aria-labelledby="validation-heading">
+        <h2 id="validation-heading">Validation report</h2>
+        <div class="banner" id="validation-banner"></div>
+        <div class="stats" id="validation-stats"></div>
+        <h3>Checks</h3>
+        <table class="table" id="checks-table">
+          <thead>
+            <tr><th>Check</th><th>Outcome</th><th class="num">Exit</th><th>Command</th><th>Notes</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <h3>Diagnostics</h3>
+        <div id="validation-diagnostics" class="diagnostics"></div>
+        <p class="footnote" id="equivalence-note"></p>
+      </section>
+
+      <section id="view-settings" class="view" aria-labelledby="settings-heading">
+        <h2 id="settings-heading">Settings</h2>
+        <h3>Toolchains</h3>
+        <table class="table" id="toolchains-table">
+          <thead><tr><th>Target</th><th>Requires</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3>Execution policy</h3>
+        <p class="lede" id="execution-summary"></p>
+        <ul class="list">
+          <li>Type checking reads the generated files; it never runs them.</li>
+          <li>Running migrated tests executes generated code and is off unless the server was started with <code>--allow-tests</code>.</li>
+          <li>Installing dependencies needs the network and is off unless the server was started with <code>--allow-install</code>.</li>
+        </ul>
+        <h3>Privacy</h3>
+        <ul class="list">
+          <li>No LLM, no remote inference, no telemetry.</li>
+          <li>The UI listens on the loopback interface only and rejects requests addressed elsewhere.</li>
+          <li>Checkpoints store file hashes and counts, never source code.</li>
+        </ul>
+        <h3>Limitations</h3>
+        <ul class="list" id="limitations-list"></ul>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

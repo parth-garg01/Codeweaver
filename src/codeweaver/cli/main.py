@@ -169,6 +169,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     languages_parser.add_argument("--json", action="store_true", help="print JSON")
 
+    ui_parser = subparsers.add_parser(
+        "ui",
+        help="Serve the local web UI.",
+        description=(
+            "Serve the local web UI on the loopback interface. The UI exposes the "
+            "local filesystem to the browser page it serves, so it refuses to bind "
+            "to a routable address."
+        ),
+    )
+    ui_parser.add_argument("--port", type=int, default=8731, help="port (default: 8731)")
+    ui_parser.add_argument(
+        "--host", default="127.0.0.1", help="loopback address to bind (default: 127.0.0.1)"
+    )
+    ui_parser.add_argument(
+        "--allow-tests",
+        action="store_true",
+        help="let the UI run migrated tests; this executes generated code",
+    )
+    ui_parser.add_argument(
+        "--allow-install",
+        action="store_true",
+        help="let the UI install target dependencies; this needs the network",
+    )
+
     clear_parser = subparsers.add_parser(
         "clear",
         help="Delete locally stored migration metadata for a project.",
@@ -195,6 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "report": _cmd_report,
         "languages": _cmd_languages,
         "clear": _cmd_clear,
+        "ui": _cmd_ui,
     }[args.command]
     try:
         return handler(args)
@@ -414,6 +439,25 @@ def _cmd_languages(args: argparse.Namespace) -> int:
             print(f"    {pair['notes']}")
     if not matrix["pairs"]:
         print("  none")
+    return EXIT_OK
+
+
+def _cmd_ui(args: argparse.Namespace) -> int:
+    from codeweaver.ui import serve
+
+    try:
+        serve(
+            host=args.host,
+            port=args.port,
+            allow_tests=args.allow_tests,
+            allow_install=args.allow_install,
+        )
+    except ValueError as exc:
+        print(f"codeweaver: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except OSError as exc:
+        print(f"codeweaver: could not start the UI: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     return EXIT_OK
 
 
