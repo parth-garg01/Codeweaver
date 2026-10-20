@@ -19,7 +19,7 @@ from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.expressions import emit_expression, emit_params
 from codeweaver.backends.typescript.naming import safe_identifier, safe_property
 from codeweaver.backends.typescript.statements import emit_block, emit_statement
-from codeweaver.backends.typescript.types import render_type
+from codeweaver.backends.typescript.types import render_return_type, render_type
 from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.declarations import IRClass, IRFunction, IRImport, IRModule, Visibility
@@ -226,7 +226,7 @@ def _emit_function(
     prefix = "export " if exported and function.visibility == Visibility.PUBLIC else ""
     asynchronous = "async " if function.is_async else ""
     params = emit_params(function.params, ctx)
-    returns = render_type(function.return_type)
+    returns = render_return_type(function.return_type)
     if function.is_async and not returns.startswith("Promise<"):
         returns = f"Promise<{returns}>"
     name = safe_identifier(function.name)
@@ -312,7 +312,7 @@ def _emit_method(method: IRFunction, writer: CodeWriter, ctx: EmitContext) -> No
     if method.is_constructor:
         header = f"constructor({params})"
     else:
-        returns = render_type(method.return_type)
+        returns = render_return_type(method.return_type)
         if method.is_async and not returns.startswith("Promise<"):
             returns = f"Promise<{returns}>"
         if method.meta.get("pythonProperty"):

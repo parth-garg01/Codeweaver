@@ -11,7 +11,7 @@ from __future__ import annotations
 from codeweaver.backends.typescript.naming import safe_identifier
 from codeweaver.ir.types import IRType, TypeKind
 
-__all__ = ["PRIMITIVE_MAP", "render_type", "render_type_arguments"]
+__all__ = ["PRIMITIVE_MAP", "render_return_type", "render_type", "render_type_arguments"]
 
 #: IR primitive name -> TypeScript type.
 PRIMITIVE_MAP: dict[str, str] = {
@@ -51,6 +51,19 @@ def render_type(ir_type: IRType | None) -> str:
             return f"{name}<{render_type_arguments(ir_type.args)}>"
         return name
     return "unknown"  # pragma: no cover - every kind is handled above
+
+
+def render_return_type(ir_type: IRType | None) -> str:
+    """Render *ir_type* as a return type.
+
+    ``-> None`` means "returns nothing", which TypeScript spells ``void``.
+    Rendering it as ``null`` would be a different promise: a function typed
+    ``: null`` has to ``return null`` explicitly, so every translated procedure
+    would fail to compile.
+    """
+    if ir_type is not None and ir_type.kind is TypeKind.NONE:
+        return "void"
+    return render_type(ir_type)
 
 
 def render_type_arguments(args: tuple[IRType, ...]) -> str:
