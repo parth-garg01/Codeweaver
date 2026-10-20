@@ -116,6 +116,9 @@ class IRField(IRNode):
     default: IRExpression | None = None
     is_static: bool = False
     visibility: str = Visibility.PUBLIC
+    #: ``True`` when the field is not guaranteed to hold a value before it is
+    #: first read, for example an attribute only assigned in a late method.
+    optional: bool = False
 
 
 @ir_node

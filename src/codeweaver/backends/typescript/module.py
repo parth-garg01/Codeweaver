@@ -276,7 +276,13 @@ def _emit_field(item, writer: CodeWriter, ctx: EmitContext) -> None:
         modifiers.append("static")
     prefix = f"{' '.join(modifiers)} " if modifiers else ""
     annotation = f": {render_type(item.field_type)}"
-    name = safe_property(item.name)
+    # A field with no guaranteed initial value is optional, which is what makes
+    # the class compile under strictPropertyInitialization.
+    name = (
+        f"{safe_property(item.name)}?"
+        if item.optional and item.default is None
+        else safe_property(item.name)
+    )
     if item.default is None:
         writer.line(f"{prefix}{name}{annotation};", item.span)
         return
