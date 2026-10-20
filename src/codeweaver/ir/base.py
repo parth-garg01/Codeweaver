@@ -22,6 +22,7 @@ from codeweaver.errors import IRSchemaError
 from codeweaver.ir.types import IRType
 
 __all__ = [
+    "CONSTRUCTS_CLASS",
     "IRNode",
     "IRUnsupported",
     "decode_value",
@@ -32,6 +33,12 @@ __all__ = [
     "registered_kinds",
     "walk",
 ]
+
+#: Metadata key marking a call that constructs a class rather than invoking a
+#: function.  A frontend cannot always tell the two apart, so the fact is
+#: recorded by a transform with project-wide knowledge and read by backends
+#: whose target spells construction differently (``new`` in TypeScript).
+CONSTRUCTS_CLASS = "constructsClass"
 
 #: kind -> node class.  Populated by the :func:`ir_node` decorator.
 _NODE_TYPES: dict[str, type[IRNode]] = {}

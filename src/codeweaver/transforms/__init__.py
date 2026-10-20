@@ -20,12 +20,17 @@ from codeweaver.transforms.base import (
     PipelineResult,
     TransformPass,
 )
+from codeweaver.transforms.construction import (
+    ClassConstructionPass,
+    mark_class_construction,
+)
 from codeweaver.transforms.fields import InferFieldsPass, infer_instance_fields
 from codeweaver.transforms.range_loops import RangeLoopPass, lower_range_loops
 from codeweaver.transforms.rewrite import count_nodes, rewrite, rewrite_all
 from codeweaver.transforms.types import TypePropagationPass, propagate_types
 
 __all__ = [
+    "ClassConstructionPass",
     "InferFieldsPass",
     "PassOutcome",
     "PassPipeline",
@@ -38,6 +43,7 @@ __all__ = [
     "default_passes",
     "infer_instance_fields",
     "lower_range_loops",
+    "mark_class_construction",
     "propagate_types",
     "rewrite",
     "rewrite_all",
