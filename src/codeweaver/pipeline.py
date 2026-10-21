@@ -38,6 +38,7 @@ from codeweaver.planner import MigrationPlan, build_plan
 from codeweaver.project_intake.manifests import Manifest, detect_manifests
 from codeweaver.project_intake.paths import normalise_root
 from codeweaver.project_intake.scanner import ScanOptions, ScanResult, scan_project
+from codeweaver.project_intake.textio import read_project_text
 from codeweaver.reporting import FileCounts, MigrationReport
 from codeweaver.transforms import default_pipeline
 from codeweaver.transforms.construction import ClassConstructionPass
@@ -170,7 +171,7 @@ def analyse_project(
         if progress is not None:
             progress("analyze", index, total, record.path)
         try:
-            text = (resolved / record.path).read_text(encoding="utf-8")
+            text = read_project_text(resolved / record.path)
         except (OSError, UnicodeDecodeError) as exc:
             diagnostics.error(
                 "CW0801",
