@@ -300,9 +300,9 @@ def run_migration(
     mappings: dict[str, list[dict[str, Any]]] = {}
     ordered = _ordered_modules(transformed, plan)
     total = len(ordered)
-    from codeweaver.backends.typescript import ModuleLayout
-
-    layout = ModuleLayout.for_modules(transformed)
+    # Built through the backend protocol, so the pipeline does not know which
+    # target it is driving.
+    layout = backend.layout_for(transformed)
     for index, module in enumerate(ordered, start=1):
         if should_cancel is not None and should_cancel():
             cancelled = True
@@ -323,9 +323,7 @@ def run_migration(
         mappings[generated.path] = generated.mappings
 
     if not cancelled:
-        from codeweaver.backends.typescript import project_files
-
-        for relative, contents in project_files(options.project_name).items():
+        for relative, contents in backend.project_files(options.project_name).items():
             (output / relative).write_text(contents, encoding="utf-8")
             written.append(relative)
 
@@ -343,6 +341,7 @@ def run_migration(
         supported_constructs=list(frontend.supported_constructs),
         mappings=mappings,
         cancelled=cancelled,
+        target_extension=backend.file_extension,
     )
     return MigrationOutcome(
         report=report, analysis=analysis, plan=plan, written_files=written, cancelled=cancelled
@@ -371,9 +370,18 @@ def _report_for(
     supported_constructs: list[str] | None = None,
     mappings: dict[str, list[dict[str, Any]]] | None = None,
     cancelled: bool = False,
+    target_extension: str = "",
 ) -> MigrationReport:
     counts = analysis.counts
-    counts.translated = len([path for path in (written or []) if path.endswith(".ts")])
+    # Count translated modules by the target's own extension rather than a
+    # hard-coded one, so the number is right for every backend.
+    # Count translated modules by the target's own extension rather than a
+    # hard-coded one, so the number is right for every backend.
+    counts.translated = (
+        len([path for path in (written or []) if path.endswith(target_extension)])
+        if target_extension
+        else 0
+    )
     report = MigrationReport(
         source_language=analysis.source_language,
         target_language=options.target,

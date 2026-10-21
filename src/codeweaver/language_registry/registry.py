@@ -192,6 +192,24 @@ class Backend(Protocol):
         """The output path for a source path, without generating anything."""
         ...
 
+    def layout_for(self, modules: list[IRModule]) -> Any:
+        """Where every module will be written, for resolving cross-module imports.
+
+        Built once for the whole project and passed back to
+        :meth:`generate_module`.  The pipeline needs the per-module call rather
+        than :meth:`generate_project` so that it can report progress, honour
+        cancellation and collect source-map metadata — so it needs a way to
+        build the layout the modules share.
+
+        The return type is the backend's own layout type; the registry has no
+        reason to know it.
+        """
+        ...
+
+    def project_files(self, project_name: str) -> dict[str, str]:
+        """Manifests and other non-source files the target ecosystem needs."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class LanguagePair:

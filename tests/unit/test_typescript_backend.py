@@ -131,8 +131,10 @@ class RegistrationTests(unittest.TestCase):
         from codeweaver.adapters import register_all
 
         matrix = register_all(LanguageRegistry()).support_matrix()
-        self.assertEqual(matrix["sources"][0]["language"], "python")
-        self.assertEqual(matrix["targets"][0]["language"], "typescript")
+        self.assertEqual([item["language"] for item in matrix["sources"]], ["python"])
+        targets = {item["language"] for item in matrix["targets"]}
+        self.assertIn("typescript", targets)
+        self.assertIn("javascript", targets)
 
 
 if __name__ == "__main__":

@@ -3,9 +3,25 @@
 CodeWeaver only advertises language pairs that are implemented end to end:
 parsing, IR mapping, code generation and target-toolchain validation.
 
-| Source | Target | Status | Notes |
-| ------ | ------ | ------ | ----- |
-| Python 3.11+ | TypeScript 5 | partial | Documented construct subset. Unsupported constructs are reported, never approximated. |
+| Source | Target | Status | Validated with | Notes |
+| ------ | ------ | ------ | -------------- | ----- |
+| Python 3.11+ | TypeScript 5 | partial | `tsc --noEmit` (strict) | Documented construct subset. Unsupported constructs are reported, never approximated. |
+| Python 3.11+ | JavaScript (ES2022) | partial | `node --check` | Same construct coverage with annotations erased. **The check is weaker:** a syntax check cannot see a type error. |
+
+### A word on what "validated" means per target
+
+The two targets share a code generator, so they translate the same constructs.
+They do **not** give you the same confidence:
+
+- TypeScript output is type-checked under `strict`, so a passing run means the
+  translation is internally consistent — the wrong type reaching the wrong
+  parameter is caught.
+- JavaScript output is only *parsed*. `node --check` proves the file is
+  syntactically valid and nothing more. Every type error the TypeScript target
+  would have caught passes silently here.
+
+If you have a choice, migrate to TypeScript and strip the types afterwards. The
+JavaScript target exists for projects that cannot take the dependency.
 
 The generated project is checked with `tsc --noEmit` under `strict`. The one
 strictness option left off is `noUncheckedIndexedAccess`: it models a language

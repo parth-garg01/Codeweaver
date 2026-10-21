@@ -14,9 +14,15 @@ you exactly what it did not.
 
 ## Status
 
-| Source | Target | Status |
-| ------ | ------ | ------ |
-| Python 3.11+ | TypeScript 5 | partial — documented construct subset |
+| Source | Target | Status | Validated with |
+| ------ | ------ | ------ | -------------- |
+| Python 3.11+ | TypeScript 5 | partial | `tsc --noEmit`, strict |
+| Python 3.11+ | JavaScript (ES2022) | partial | `node --check` only |
+
+The two targets share a code generator and translate the same constructs, but
+they do not earn the same confidence: TypeScript output is type-checked, while
+JavaScript output is only parsed. The report always names the check that
+actually ran.
 
 `partial` is not a softer word for `supported`. A deliberately scoped set of
 constructs is translated; everything else produces a diagnostic, a
@@ -53,6 +59,7 @@ codeweaver scan   ./my-project       # which files would be used, and what was s
 codeweaver analyze ./my-project      # parse, index symbols, build the graph
 codeweaver plan   ./my-project --to typescript
 codeweaver migrate ./my-project --to typescript --out ../my-project-ts
+codeweaver migrate ./my-project --to javascript --out ../my-project-js
 codeweaver validate ../my-project-ts
 codeweaver report ./my-project --format markdown
 ```

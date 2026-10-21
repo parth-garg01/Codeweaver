@@ -29,6 +29,12 @@ class EmitContext:
     #: Name of the method receiver in the body being emitted (Python's
     #: ``self``/``cls``).  References to it become ``this``.
     receiver: str = ""
+    #: Whether this dialect has type annotations.  TypeScript and JavaScript
+    #: share every other decision — operator precedence, statement shapes,
+    #: builtin and exception mapping — so they share one emitter and differ by
+    #: this flag.  Forking the emitter would mean two copies of that logic
+    #: drifting apart.
+    emit_types: bool = True
     #: Dotted module path -> the local name its namespace import bound, for the
     #: module being emitted.  A reference such as ``pkg.util.helper`` has to be
     #: rewritten to that binding, because the import statement introduced one

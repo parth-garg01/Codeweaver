@@ -484,22 +484,24 @@ def emit_params(params: list[IRParam], ctx: EmitContext) -> str:
     for param in params:
         name = safe_identifier(param.name)
         if param.style == "var_positional":
-            rendered.append(f"...{name}: unknown[]")
+            rendered.append(f"...{name}: unknown[]" if ctx.emit_types else f"...{name}")
             continue
         if param.style == "var_keyword":
-            rendered.append(f"{name}: Record<string, unknown> = {{}}")
             ctx.warn(
                 "CW0608",
                 f"**{param.name} is emitted as a trailing options object",
                 span=param.span,
             )
+            rendered.append(
+                f"{name}: Record<string, unknown> = {{}}" if ctx.emit_types else f"{name} = {{}}"
+            )
             continue
-        annotation = render_type(param.param_type)
+        annotated = f"{name}: {render_type(param.param_type)}" if ctx.emit_types else name
         if param.default is not None:
             default = emit_expression(param.default, ctx).text
-            rendered.append(f"{name}: {annotation} = {default}")
+            rendered.append(f"{annotated} = {default}")
         else:
-            rendered.append(f"{name}: {annotation}")
+            rendered.append(annotated)
     return ", ".join(rendered)
 
 

@@ -112,7 +112,9 @@ def _var_decl(node: IRVarDecl, writer: CodeWriter, ctx: EmitContext) -> None:
     keyword = "const" if node.is_const else "let"
     name = safe_identifier(node.name)
     annotation = (
-        f": {render_type(node.var_type)}" if node.var_type.kind is not TypeKind.UNKNOWN else ""
+        f": {render_type(node.var_type)}"
+        if ctx.emit_types and node.var_type.kind is not TypeKind.UNKNOWN
+        else ""
     )
     if node.value is None:
         # `let x: T;` is valid; `const x;` is not, so an uninitialised constant
