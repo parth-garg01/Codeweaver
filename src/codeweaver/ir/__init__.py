@@ -26,6 +26,7 @@ from codeweaver.ir.declarations import (
     Visibility,
 )
 from codeweaver.ir.expressions import (
+    ExpressionSlot,
     IRArrayLiteral,
     IRAttribute,
     IRAwait,
@@ -73,12 +74,14 @@ from codeweaver.ir.statements import (
     IRTry,
     IRVarDecl,
     IRWhile,
+    StatementSlot,
 )
 from codeweaver.ir.types import IRType, TypeKind
 from codeweaver.ir.version import IR_SCHEMA_VERSION, is_compatible
 
 __all__ = [
     "IR_SCHEMA_VERSION",
+    "ExpressionSlot",
     "BinaryOp",
     "CompareOp",
     "IRArrayLiteral",
@@ -135,6 +138,7 @@ __all__ = [
     "IRVarDecl",
     "IRWhile",
     "LogicalOp",
+    "StatementSlot",
     "TypeKind",
     "UnaryOp",
     "Visibility",

@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from codeweaver.ir.base import IRNode, ir_node
+from codeweaver.ir.base import IRNode, IRUnsupported, ir_node
 from codeweaver.ir.operators import BinaryOp, CompareOp, LogicalOp, UnaryOp
 from codeweaver.ir.types import IRType, t_unknown
 
 __all__ = [
+    "ExpressionSlot",
     "IRArrayLiteral",
     "IRComprehension",
     "IRAttribute",
@@ -50,6 +51,19 @@ class IRExpression(IRNode):
     value_type: IRType = field(default_factory=t_unknown, kw_only=True)
 
 
+#: What may stand where an expression is expected.
+#:
+#: :class:`~codeweaver.ir.base.IRUnsupported` is position-agnostic by design —
+#: it stands wherever the construct it replaced stood — and
+#: :mod:`codeweaver.ir.schema` validates exactly that.  Spelling it out in the
+#: annotations keeps the type checker in agreement with the validator, instead
+#: of rejecting every frontend converter that can report a gap.
+#:
+#: Written as a plain alias rather than PEP 695 `type` syntax because the
+#: project supports Python 3.11.
+ExpressionSlot = IRExpression | IRUnsupported
+
+
 @ir_node
 @dataclass
 class IRLiteral(IRExpression):
@@ -80,8 +94,8 @@ class IRBinary(IRExpression):
     kind: ClassVar[str] = "binary"
 
     op: BinaryOp
-    left: IRExpression
-    right: IRExpression
+    left: ExpressionSlot
+    right: ExpressionSlot
 
 
 @ir_node
@@ -90,7 +104,7 @@ class IRUnary(IRExpression):
     kind: ClassVar[str] = "unary"
 
     op: UnaryOp
-    operand: IRExpression
+    operand: ExpressionSlot
 
 
 @ir_node
@@ -105,8 +119,8 @@ class IRCompare(IRExpression):
     kind: ClassVar[str] = "compare"
 
     op: CompareOp
-    left: IRExpression
-    right: IRExpression
+    left: ExpressionSlot
+    right: ExpressionSlot
 
 
 @ir_node
@@ -115,7 +129,7 @@ class IRLogical(IRExpression):
     kind: ClassVar[str] = "logical"
 
     op: LogicalOp
-    operands: list[IRExpression] = field(default_factory=list)
+    operands: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -126,7 +140,7 @@ class IRKeyword(IRNode):
     kind: ClassVar[str] = "keyword"
 
     name: str
-    value: IRExpression
+    value: ExpressionSlot
 
 
 @ir_node
@@ -134,13 +148,13 @@ class IRKeyword(IRNode):
 class IRCall(IRExpression):
     kind: ClassVar[str] = "call"
 
-    callee: IRExpression
-    args: list[IRExpression] = field(default_factory=list)
+    callee: ExpressionSlot
+    args: list[ExpressionSlot] = field(default_factory=list)
     keywords: list[IRKeyword] = field(default_factory=list)
     #: ``f(*xs)`` / ``f(**kw)`` positions, recorded so a backend can refuse or
     #: lower them rather than quietly dropping the spread.
-    star_args: list[IRExpression] = field(default_factory=list)
-    star_keywords: list[IRExpression] = field(default_factory=list)
+    star_args: list[ExpressionSlot] = field(default_factory=list)
+    star_keywords: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -148,7 +162,7 @@ class IRCall(IRExpression):
 class IRAttribute(IRExpression):
     kind: ClassVar[str] = "attribute"
 
-    target: IRExpression
+    target: ExpressionSlot
     name: str
 
 
@@ -157,8 +171,8 @@ class IRAttribute(IRExpression):
 class IRIndex(IRExpression):
     kind: ClassVar[str] = "index"
 
-    target: IRExpression
-    index: IRExpression
+    target: ExpressionSlot
+    index: ExpressionSlot
 
 
 @ir_node
@@ -166,10 +180,10 @@ class IRIndex(IRExpression):
 class IRSlice(IRExpression):
     kind: ClassVar[str] = "slice"
 
-    target: IRExpression
-    lower: IRExpression | None = None
-    upper: IRExpression | None = None
-    step: IRExpression | None = None
+    target: ExpressionSlot
+    lower: ExpressionSlot | None = None
+    upper: ExpressionSlot | None = None
+    step: ExpressionSlot | None = None
 
 
 @ir_node
@@ -177,7 +191,7 @@ class IRSlice(IRExpression):
 class IRArrayLiteral(IRExpression):
     kind: ClassVar[str] = "array"
 
-    elements: list[IRExpression] = field(default_factory=list)
+    elements: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -185,7 +199,7 @@ class IRArrayLiteral(IRExpression):
 class IRTupleLiteral(IRExpression):
     kind: ClassVar[str] = "tuple"
 
-    elements: list[IRExpression] = field(default_factory=list)
+    elements: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -193,7 +207,7 @@ class IRTupleLiteral(IRExpression):
 class IRSetLiteral(IRExpression):
     kind: ClassVar[str] = "set"
 
-    elements: list[IRExpression] = field(default_factory=list)
+    elements: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -201,8 +215,8 @@ class IRSetLiteral(IRExpression):
 class IRMapEntry(IRNode):
     kind: ClassVar[str] = "map_entry"
 
-    key: IRExpression
-    value: IRExpression
+    key: ExpressionSlot
+    value: ExpressionSlot
 
 
 @ir_node
@@ -222,7 +236,7 @@ class IRParam(IRNode):
 
     name: str
     param_type: IRType = field(default_factory=t_unknown)
-    default: IRExpression | None = None
+    default: ExpressionSlot | None = None
     #: ``positional`` | ``keyword`` | ``var_positional`` | ``var_keyword``
     style: str = "positional"
 
@@ -233,7 +247,7 @@ class IRLambda(IRExpression):
     kind: ClassVar[str] = "lambda"
 
     params: list[IRParam] = field(default_factory=list)
-    body: IRExpression | None = None
+    body: ExpressionSlot | None = None
 
 
 @ir_node
@@ -241,9 +255,9 @@ class IRLambda(IRExpression):
 class IRConditional(IRExpression):
     kind: ClassVar[str] = "conditional"
 
-    test: IRExpression
-    then_value: IRExpression
-    else_value: IRExpression
+    test: ExpressionSlot
+    then_value: ExpressionSlot
+    else_value: ExpressionSlot
 
 
 @ir_node
@@ -258,7 +272,7 @@ class IRTemplateString(IRExpression):
 
     kind: ClassVar[str] = "template_string"
 
-    parts: list[IRExpression] = field(default_factory=list)
+    parts: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -266,7 +280,7 @@ class IRTemplateString(IRExpression):
 class IRAwait(IRExpression):
     kind: ClassVar[str] = "await"
 
-    operand: IRExpression
+    operand: ExpressionSlot
 
 
 @ir_node
@@ -288,7 +302,7 @@ class IRComprehension(IRExpression):
 
     form: str
     target: str
-    iterable: IRExpression
-    element: IRExpression
-    key: IRExpression | None = None
-    condition: IRExpression | None = None
+    iterable: ExpressionSlot
+    element: ExpressionSlot
+    key: ExpressionSlot | None = None
+    condition: ExpressionSlot | None = None

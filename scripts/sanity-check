@@ -77,6 +77,12 @@ fi
 bold "3. static types"
 if command -v mypy >/dev/null 2>&1; then
   run "mypy" mypy
+elif [ -n "${CI:-}" ]; then
+  # On a developer machine a missing optional tool is a skip. In CI it is a
+  # failure: the type gate going quiet is how 91 errors reached main once
+  # already (see issue #1).
+  printf '  %-34s \033[31mFAIL\033[0m (%s)\n' "mypy" "required in CI but not installed"
+  FAIL=$((FAIL + 1)); RESULTS+=("FAIL  mypy (required in CI but not installed)")
 else
   skip "mypy" "mypy not installed (pip install -e '.[dev]')"
 fi

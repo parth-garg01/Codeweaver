@@ -14,6 +14,9 @@ approximated, and each one reports what it did:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.exceptions import (
     COLLAPSED_TO_ERROR,
@@ -68,6 +71,10 @@ _AUG_SPELLING: dict[BinaryOp, str] = {
 
 #: Name bound by a generated catch clause.
 _CAUGHT = "error"
+
+
+#: Signature every statement emitter shares.
+_Handler = Callable[[Any, CodeWriter, EmitContext], None]
 
 
 def emit_block(block: IRBlock | None, writer: CodeWriter, ctx: EmitContext) -> None:
@@ -414,7 +421,7 @@ def _comment(node: IRComment, writer: CodeWriter, ctx: EmitContext) -> None:  # 
         writer.line(f"// {line}".rstrip(), node.span)
 
 
-_HANDLERS: dict[type[IRNode], object] = {
+_HANDLERS: dict[type[IRNode], _Handler] = {
     IRExpressionStatement: _expression_statement,
     IRVarDecl: _var_decl,
     IRAssign: _assign,

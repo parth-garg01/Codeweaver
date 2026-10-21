@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 from codeweaver.ir.base import IRNode
 
@@ -21,8 +22,14 @@ __all__ = ["count_nodes", "rewrite", "rewrite_all"]
 
 Rewriter = Callable[[IRNode], IRNode | None]
 
+#: Rewriting is type-preserving by contract: a replacement stands in the same
+#: position as the node it replaces, so it belongs to the same category.  The
+#: type variable states that, which is what lets a pass put the result back
+#: into a typed field without widening it.
+NodeT = TypeVar("NodeT", bound=IRNode)
 
-def rewrite(node: IRNode, rewriter: Rewriter) -> IRNode:
+
+def rewrite(node: NodeT, rewriter: Rewriter) -> NodeT:
     """Rewrite *node* bottom-up.
 
     *rewriter* is called with each node after its children have been rewritten.
@@ -32,15 +39,18 @@ def rewrite(node: IRNode, rewriter: Rewriter) -> IRNode:
     """
     rebuilt = _rebuild_children(node, rewriter)
     replacement = rewriter(rebuilt)
-    return replacement if replacement is not None else rebuilt
+    # The cast encodes the contract rather than a checked fact: a rewriter that
+    # returned a different category of node would be a bug in the pass, and
+    # ir.schema would reject the resulting tree.
+    return cast("NodeT", replacement if replacement is not None else rebuilt)
 
 
-def rewrite_all(nodes: list[IRNode], rewriter: Rewriter) -> list[IRNode]:
+def rewrite_all(nodes: list[NodeT], rewriter: Rewriter) -> list[NodeT]:
     return [rewrite(node, rewriter) for node in nodes]
 
 
-def _rebuild_children(node: IRNode, rewriter: Rewriter) -> IRNode:
-    changes: dict[str, object] = {}
+def _rebuild_children(node: NodeT, rewriter: Rewriter) -> NodeT:
+    changes: dict[str, Any] = {}
     for info in node.payload_fields():
         value = getattr(node, info.name)
         if isinstance(value, IRNode):

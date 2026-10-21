@@ -12,12 +12,13 @@ Two decisions here carry most of the weight:
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
+from typing import Any
 
 from codeweaver.frontends.python.annotations import annotation_to_type
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.expressions import BINARY_OPS, convert_expression
-from codeweaver.ir.base import IRNode
-from codeweaver.ir.expressions import IRName
+from codeweaver.ir.expressions import ExpressionSlot, IRName
 from codeweaver.ir.statements import (
     IRAssert,
     IRAssign,
@@ -36,10 +37,15 @@ from codeweaver.ir.statements import (
     IRTry,
     IRVarDecl,
     IRWhile,
+    StatementSlot,
 )
-from codeweaver.ir.types import t_unknown
+from codeweaver.ir.types import IRType, t_unknown
 
 __all__ = ["convert_block", "convert_statement", "convert_statements"]
+
+
+#: Signature every statement handler shares.
+_Handler = Callable[[Any, ConversionContext], "StatementSlot"]
 
 
 def convert_block(body: list[ast.stmt], ctx: ConversionContext) -> IRBlock:
@@ -47,25 +53,25 @@ def convert_block(body: list[ast.stmt], ctx: ConversionContext) -> IRBlock:
     return IRBlock(convert_statements(body, ctx))
 
 
-def convert_statements(body: list[ast.stmt], ctx: ConversionContext) -> list[IRNode]:
-    converted: list[IRNode] = []
+def convert_statements(body: list[ast.stmt], ctx: ConversionContext) -> list[StatementSlot]:
+    converted: list[StatementSlot] = []
     for statement in body:
         converted.append(convert_statement(statement, ctx))
     return converted
 
 
-def convert_statement(node: ast.stmt, ctx: ConversionContext) -> IRNode:
+def convert_statement(node: ast.stmt, ctx: ConversionContext) -> StatementSlot:
     handler = _HANDLERS.get(type(node))
     if handler is None:
         return ctx.unsupported(node, "statement form has no IR mapping")
     return handler(node, ctx)
 
 
-def _expr(node: ast.Expr, ctx: ConversionContext) -> IRNode:
+def _expr(node: ast.Expr, ctx: ConversionContext) -> StatementSlot:
     return IRExpressionStatement(convert_expression(node.value, ctx), span=ctx.span(node))
 
 
-def _assign(node: ast.Assign, ctx: ConversionContext) -> IRNode:
+def _assign(node: ast.Assign, ctx: ConversionContext) -> StatementSlot:
     if len(node.targets) != 1:
         return ctx.unsupported(
             node,
@@ -86,7 +92,7 @@ def _assign(node: ast.Assign, ctx: ConversionContext) -> IRNode:
     return IRAssign(converted_target, value, span=ctx.span(node))
 
 
-def _ann_assign(node: ast.AnnAssign, ctx: ConversionContext) -> IRNode:
+def _ann_assign(node: ast.AnnAssign, ctx: ConversionContext) -> StatementSlot:
     declared = annotation_to_type(node.annotation)
     value = convert_expression(node.value, ctx) if node.value is not None else None
     if isinstance(node.target, ast.Name):
@@ -102,21 +108,24 @@ def _ann_assign(node: ast.AnnAssign, ctx: ConversionContext) -> IRNode:
 
 def _bind_name(
     name: str,
-    declared_type,
-    value,
+    declared_type: IRType,
+    value: ExpressionSlot | None,
     node: ast.stmt,
     ctx: ConversionContext,
     *,
     force_declaration: bool = False,
-) -> IRNode:
+) -> StatementSlot:
     is_new = force_declaration or name not in ctx.bound_names
     ctx.bound_names.add(name)
-    if is_new:
+    if is_new or value is None:
+        # A re-assignment with no value cannot happen in Python, but a
+        # declaration without one can (`x: int`), so the declaration form is
+        # also the safe fallback.
         return IRVarDecl(name, declared_type, value, span=ctx.span(node))
     return IRAssign(IRName(name, span=ctx.span(node)), value, span=ctx.span(node))
 
 
-def _aug_assign(node: ast.AugAssign, ctx: ConversionContext) -> IRNode:
+def _aug_assign(node: ast.AugAssign, ctx: ConversionContext) -> StatementSlot:
     op = BINARY_OPS.get(type(node.op))
     if op is None:  # pragma: no cover - every operator is mapped
         return ctx.unsupported(node, "augmented operator has no IR mapping")
@@ -128,12 +137,12 @@ def _aug_assign(node: ast.AugAssign, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _return(node: ast.Return, ctx: ConversionContext) -> IRNode:
+def _return(node: ast.Return, ctx: ConversionContext) -> StatementSlot:
     value = convert_expression(node.value, ctx) if node.value is not None else None
     return IRReturn(value, span=ctx.span(node))
 
 
-def _if(node: ast.If, ctx: ConversionContext) -> IRNode:
+def _if(node: ast.If, ctx: ConversionContext) -> StatementSlot:
     return IRIf(
         convert_expression(node.test, ctx),
         convert_block(node.body, ctx),
@@ -142,7 +151,7 @@ def _if(node: ast.If, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _while(node: ast.While, ctx: ConversionContext) -> IRNode:
+def _while(node: ast.While, ctx: ConversionContext) -> StatementSlot:
     return IRWhile(
         convert_expression(node.test, ctx),
         convert_block(node.body, ctx),
@@ -151,7 +160,7 @@ def _while(node: ast.While, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _for(node: ast.For, ctx: ConversionContext) -> IRNode:
+def _for(node: ast.For, ctx: ConversionContext) -> StatementSlot:
     if isinstance(node.target, ast.Tuple | ast.List):
         return ctx.unsupported(
             node,
@@ -169,7 +178,7 @@ def _for(node: ast.For, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _async_for(node: ast.AsyncFor, ctx: ConversionContext) -> IRNode:
+def _async_for(node: ast.AsyncFor, ctx: ConversionContext) -> StatementSlot:
     return ctx.unsupported(
         node,
         "asynchronous iteration has no IR mapping",
@@ -177,7 +186,7 @@ def _async_for(node: ast.AsyncFor, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _try(node: ast.Try, ctx: ConversionContext) -> IRNode:
+def _try(node: ast.Try, ctx: ConversionContext) -> StatementSlot:
     handlers: list[IRCatch] = []
     for handler in node.handlers:
         types: list = []
@@ -204,7 +213,7 @@ def _try(node: ast.Try, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _raise(node: ast.Raise, ctx: ConversionContext) -> IRNode:
+def _raise(node: ast.Raise, ctx: ConversionContext) -> StatementSlot:
     return IRThrow(
         convert_expression(node.exc, ctx) if node.exc is not None else None,
         convert_expression(node.cause, ctx) if node.cause is not None else None,
@@ -212,7 +221,7 @@ def _raise(node: ast.Raise, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _assert(node: ast.Assert, ctx: ConversionContext) -> IRNode:
+def _assert(node: ast.Assert, ctx: ConversionContext) -> StatementSlot:
     return IRAssert(
         convert_expression(node.test, ctx),
         convert_expression(node.msg, ctx) if node.msg is not None else None,
@@ -220,25 +229,25 @@ def _assert(node: ast.Assert, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _delete(node: ast.Delete, ctx: ConversionContext) -> IRNode:
+def _delete(node: ast.Delete, ctx: ConversionContext) -> StatementSlot:
     return IRDelete(
         [convert_expression(target, ctx) for target in node.targets], span=ctx.span(node)
     )
 
 
-def _pass(node: ast.Pass, ctx: ConversionContext) -> IRNode:
+def _pass(node: ast.Pass, ctx: ConversionContext) -> StatementSlot:
     return IRNoOp(span=ctx.span(node))
 
 
-def _break(node: ast.Break, ctx: ConversionContext) -> IRNode:
+def _break(node: ast.Break, ctx: ConversionContext) -> StatementSlot:
     return IRBreak(span=ctx.span(node))
 
 
-def _continue(node: ast.Continue, ctx: ConversionContext) -> IRNode:
+def _continue(node: ast.Continue, ctx: ConversionContext) -> StatementSlot:
     return IRContinue(span=ctx.span(node))
 
 
-def _with(node: ast.stmt, ctx: ConversionContext) -> IRNode:
+def _with(node: ast.stmt, ctx: ConversionContext) -> StatementSlot:
     return ctx.unsupported(
         node,
         "context managers have no IR mapping",
@@ -246,7 +255,7 @@ def _with(node: ast.stmt, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _scope_declaration(node: ast.stmt, ctx: ConversionContext) -> IRNode:
+def _scope_declaration(node: ast.stmt, ctx: ConversionContext) -> StatementSlot:
     return ctx.unsupported(
         node,
         "global and nonlocal declarations have no IR mapping",
@@ -254,7 +263,7 @@ def _scope_declaration(node: ast.stmt, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _match(node: ast.stmt, ctx: ConversionContext) -> IRNode:
+def _match(node: ast.stmt, ctx: ConversionContext) -> StatementSlot:
     return ctx.unsupported(
         node,
         "structural pattern matching has no IR mapping",
@@ -262,7 +271,7 @@ def _match(node: ast.stmt, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _nested_definition(node: ast.stmt, ctx: ConversionContext) -> IRNode:
+def _nested_definition(node: ast.stmt, ctx: ConversionContext) -> StatementSlot:
     return ctx.unsupported(
         node,
         f"nested {type(node).__name__} is not lifted by this build",
@@ -270,7 +279,7 @@ def _nested_definition(node: ast.stmt, ctx: ConversionContext) -> IRNode:
     )
 
 
-def _nested_import(node: ast.stmt, ctx: ConversionContext) -> IRNode:
+def _nested_import(node: ast.stmt, ctx: ConversionContext) -> StatementSlot:
     return ctx.unsupported(
         node,
         "imports inside a function body are not hoisted by this build",
@@ -278,7 +287,7 @@ def _nested_import(node: ast.stmt, ctx: ConversionContext) -> IRNode:
     )
 
 
-_HANDLERS: dict[type[ast.AST], object] = {
+_HANDLERS: dict[type[ast.AST], _Handler] = {
     ast.Expr: _expr,
     ast.Assign: _assign,
     ast.AnnAssign: _ann_assign,

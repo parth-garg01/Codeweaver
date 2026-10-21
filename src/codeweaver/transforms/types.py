@@ -49,10 +49,11 @@ def scope_types(root: IRNode, bag: DiagnosticBag | None = None) -> dict[str, IRT
                 found[param.name] = param.param_type
     for node in walk(root):
         if isinstance(node, IRVarDecl) and node.name:
-            declared = node.var_type
+            declared: IRType | None = node.var_type
             if not _is_known(declared):
-                declared = getattr(node.value, "value_type", None)
-            if not _is_known(declared):
+                observed = getattr(node.value, "value_type", None)
+                declared = observed if isinstance(observed, IRType) else None
+            if declared is None or not _is_known(declared):
                 continue
             existing = found.get(node.name)
             if existing is not None and existing != declared:

@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from codeweaver.ir.base import IRNode, ir_node, walk
-from codeweaver.ir.expressions import IRExpression, IRParam
-from codeweaver.ir.statements import IRBlock, IRStatement
+from codeweaver.ir.expressions import ExpressionSlot, IRParam
+from codeweaver.ir.statements import IRBlock, StatementSlot
 from codeweaver.ir.types import IRType, t_unknown
 
 __all__ = [
@@ -62,7 +62,7 @@ class IRDecorator(IRNode):
 
     kind: ClassVar[str] = "decorator"
 
-    expression: IRExpression
+    expression: ExpressionSlot
     source_text: str = ""
 
 
@@ -113,7 +113,7 @@ class IRField(IRNode):
 
     name: str
     field_type: IRType = field(default_factory=t_unknown)
-    default: IRExpression | None = None
+    default: ExpressionSlot | None = None
     is_static: bool = False
     visibility: str = Visibility.PUBLIC
     #: ``True`` when the field is not guaranteed to hold a value before it is
@@ -157,7 +157,7 @@ class IRClass(IRNode):
     kind: ClassVar[str] = "class"
 
     name: str
-    bases: list[IRExpression] = field(default_factory=list)
+    bases: list[ExpressionSlot] = field(default_factory=list)
     fields: list[IRField] = field(default_factory=list)
     methods: list[IRFunction] = field(default_factory=list)
     decorators: list[IRDecorator] = field(default_factory=list)
@@ -184,7 +184,7 @@ class IRModule(IRNode):
     path: str = ""
     source_language: str = ""
     imports: list[IRImport] = field(default_factory=list)
-    body: list[IRStatement] = field(default_factory=list)
+    body: list[StatementSlot] = field(default_factory=list)
     functions: list[IRFunction] = field(default_factory=list)
     classes: list[IRClass] = field(default_factory=list)
     docstring: str = ""
