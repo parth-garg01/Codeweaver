@@ -287,7 +287,60 @@ def _call(node: IRCall, ctx: EmitContext) -> Emitted:
     return Emitted(f"{callee}({', '.join(arguments)})", _MEMBER)
 
 
+def _dotted_chain(node: IRNode) -> list[str] | None:
+    """The dotted name an expression spells, or ``None`` if it is not one.
+
+    ``pkg.util.helper`` becomes ``["pkg", "util", "helper"]``; anything with a
+    call, an index or a non-name root returns ``None``.
+    """
+    parts: list[str] = []
+    current = node
+    while isinstance(current, IRAttribute):
+        parts.append(current.name)
+        current = current.target
+    if not isinstance(current, IRName):
+        return None
+    parts.append(current.name)
+    parts.reverse()
+    return parts
+
+
+def _namespace_reference(node: IRAttribute, ctx: EmitContext) -> str | None:
+    """Rewrite a reference that reaches through a namespace import.
+
+    ``import pkg.util`` binds one name in the generated module, so
+    ``pkg.util.helper`` has to become ``<binding>.helper``.  Emitting the
+    original chain produced a reference to ``pkg``, which was never imported.
+
+    The longest matching dotted prefix wins, so ``a.b`` is preferred over ``a``
+    when both were imported.
+    """
+    if not ctx.namespace_imports:
+        return None
+    parts = _dotted_chain(node)
+    if parts is None or len(parts) < 2:
+        return None
+    for length in range(len(parts) - 1, 0, -1):
+        prefix = ".".join(parts[:length])
+        binding = ctx.namespace_imports.get(prefix)
+        if binding is None:
+            continue
+        rest = parts[length:]
+        rendered = safe_identifier(binding)
+        for name in rest:
+            rendered = (
+                f"{rendered}.{name}"
+                if name.isidentifier() and safe_property(name) == name
+                else f"{rendered}[{escape_string(name)}]"
+            )
+        return rendered
+    return None
+
+
 def _attribute(node: IRAttribute, ctx: EmitContext) -> Emitted:
+    rewritten = _namespace_reference(node, ctx)
+    if rewritten is not None:
+        return Emitted(rewritten, _MEMBER)
     if _is_super(node.target):
         target = "super"
     else:
