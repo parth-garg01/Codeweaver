@@ -103,6 +103,23 @@ class IRImport(IRNode):
     def imports_whole_module(self) -> bool:
         return not self.names
 
+    @property
+    def local_binding(self) -> str:
+        """The single local name a whole-module import introduces.
+
+        Python's ``import a.b`` binds ``a`` and reaches ``a.b`` through it,
+        which most targets cannot express: they bind one name per import.  The
+        IR therefore records one unambiguous binding per import — the alias
+        when the source gave one, otherwise the dotted path flattened with
+        underscores.
+
+        Flattening rather than taking the last component matters: ``import
+        pkg.util`` and ``import other.util`` would otherwise both want ``util``.
+        """
+        if self.module_alias:
+            return self.module_alias
+        return self.module.replace(".", "_")
+
 
 @ir_node
 @dataclass
