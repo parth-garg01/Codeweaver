@@ -8,6 +8,7 @@ The project being migrated is never imported or executed — only parsed.
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
@@ -84,7 +85,10 @@ def parse_source(source: str, path: str) -> ParseResult:
             f"syntax error: {exc.msg}",
             stage="frontend/python",
             span=SourceSpan(path, exc.lineno or 0, max((exc.offset or 1) - 1, 0)),
-            hint="CodeWeaver parses with the Python version it runs on",
+            hint=(
+                "CodeWeaver parses with the Python version it runs on "
+                f"({sys.version_info.major}.{sys.version_info.minor})"
+            ),
         )
         return ParseResult(None, diagnostics)
     except ValueError as exc:

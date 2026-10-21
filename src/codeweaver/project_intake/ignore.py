@@ -21,6 +21,8 @@ import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from codeweaver.project_intake.textio import read_project_text
+
 __all__ = [
     "DEFAULT_IGNORE_PATTERNS",
     "IgnoreRule",
@@ -143,7 +145,7 @@ class IgnoreRules:
         if not path.is_file():
             return False
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = read_project_text(path, errors="replace")
         except OSError:
             return False
         try:

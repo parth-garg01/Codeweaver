@@ -31,6 +31,7 @@ from codeweaver.pipeline import (
 )
 from codeweaver.project_intake.paths import PathSafetyError, normalise_root, resolve_within
 from codeweaver.project_intake.scanner import ScanOptions, scan_project
+from codeweaver.project_intake.textio import read_project_text
 from codeweaver.validation import ExecutionPolicy, validate_project
 
 __all__ = ["ApiError", "ApiRouter", "MAX_PREVIEW_BYTES"]
@@ -180,7 +181,7 @@ class ApiRouter:
         if size > MAX_PREVIEW_BYTES:
             raise ApiError(f"file is too large to preview ({size} bytes > {MAX_PREVIEW_BYTES})")
         try:
-            contents = target.read_text(encoding="utf-8")
+            contents = read_project_text(target)
         except UnicodeDecodeError as exc:
             raise ApiError("file is not UTF-8 text") from exc
         return {"root": str(root), "path": relative, "contents": contents, "sizeBytes": size}
