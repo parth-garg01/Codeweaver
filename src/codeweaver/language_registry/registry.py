@@ -13,11 +13,15 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.errors import UnsupportedPairError
+from codeweaver.ir.declarations import IRModule
 
 __all__ = [
     "Backend",
     "Frontend",
+    "GeneratedFile",
+    "ParseResult",
     "LanguagePair",
     "LanguageRegistry",
     "SupportLevel",
@@ -41,30 +45,152 @@ class SupportLevel(enum.StrEnum):
 
 
 @runtime_checkable
+class ParseResult(Protocol):
+    """What a frontend returns for one source file.
+
+    Declared structurally so the registry does not have to import any
+    frontend, which would make the dependency run the wrong way.
+    """
+
+    @property
+    def module(self) -> IRModule | None:
+        """The parsed module, or ``None`` when parsing failed outright."""
+        ...
+
+    @property
+    def diagnostics(self) -> DiagnosticBag:
+        """Everything the frontend wants reported, including unsupported nodes."""
+        ...
+
+
+@runtime_checkable
+class GeneratedFile(Protocol):
+    """What a backend returns for one IR module."""
+
+    @property
+    def path(self) -> str:
+        """Output path, relative to the output directory."""
+        ...
+
+    @property
+    def contents(self) -> str: ...
+
+    @property
+    def mappings(self) -> list[dict[str, Any]]:
+        """Output-line to source-line records, for mapping errors back."""
+        ...
+
+    @property
+    def diagnostics(self) -> DiagnosticBag: ...
+
+    @property
+    def unsupported_count(self) -> int: ...
+
+
+@runtime_checkable
 class Frontend(Protocol):
-    """A source-language frontend: source text in, IR modules out."""
+    """A source-language frontend: source text in, IR modules out.
 
-    language: str
-    display_name: str
-    file_extensions: tuple[str, ...]
-    supported_constructs: tuple[str, ...]
-    known_limitations: tuple[str, ...]
+    The descriptive members are read-only properties rather than mutable
+    attributes.  A mutable protocol attribute is invariant, so an
+    implementation declaring ``file_extensions: tuple[str, str]`` — which is
+    what a concrete adapter naturally writes — would not satisfy
+    ``tuple[str, ...]``.  Read-only properties are covariant, and an ordinary
+    attribute satisfies one, so a normal dataclass adapter type-checks.
+    """
 
-    def parse_module(self, source: str, path: str) -> Any: ...
+    @property
+    def language(self) -> str:
+        """Registry key, for example ``"python"``."""
+        ...
+
+    @property
+    def display_name(self) -> str: ...
+
+    @property
+    def file_extensions(self) -> tuple[str, ...]:
+        """Extensions this frontend parses, including the leading dot."""
+        ...
+
+    @property
+    def supported_constructs(self) -> tuple[str, ...]: ...
+
+    @property
+    def known_limitations(self) -> tuple[str, ...]:
+        """What this frontend reports rather than translating.  Not optional."""
+        ...
+
+    def parse_module(self, source: str, path: str) -> ParseResult:
+        """Parse *source*, which is already decoded text, into IR.
+
+        *path* is project-relative and is used for source spans; the frontend
+        must not read it from disk.
+        """
+        ...
 
 
 @runtime_checkable
 class Backend(Protocol):
     """A target-language backend: IR in, target files out."""
 
-    language: str
-    display_name: str
-    file_extension: str
-    supported_constructs: tuple[str, ...]
-    known_limitations: tuple[str, ...]
-    required_toolchains: tuple[str, ...]
+    @property
+    def language(self) -> str: ...
 
-    def generate_module(self, module: Any) -> Any: ...
+    @property
+    def display_name(self) -> str: ...
+
+    @property
+    def file_extension(self) -> str: ...
+
+    @property
+    def supported_constructs(self) -> tuple[str, ...]: ...
+
+    @property
+    def known_limitations(self) -> tuple[str, ...]: ...
+
+    @property
+    def required_toolchains(self) -> tuple[str, ...]:
+        """Executables needed to validate this backend's output."""
+        ...
+
+    def generate_module(
+        self,
+        module: IRModule,
+        layout: Any = None,
+        *,
+        diagnostics: DiagnosticBag | None = None,
+    ) -> GeneratedFile:
+        """Generate the target file for *module*.
+
+        *layout* carries where every module in the project will be written, so
+        that a cross-module import can be spelled relatively.  It is the
+        backend's own layout type, which is why it is untyped here: the
+        registry has no reason to know it.  Passing ``None`` means "this module
+        alone", which is only correct when it has no project imports.
+
+        *diagnostics* is the run's shared bag.  A backend appends to it rather
+        than returning a second one, so the migration report sees every
+        diagnostic in the order it was produced.
+        """
+        ...
+
+    def generate_project(
+        self,
+        modules: list[IRModule],
+        *,
+        project_name: str = "codeweaver-output",
+        diagnostics: DiagnosticBag | None = None,
+    ) -> dict[str, str]:
+        """Generate every file of the target project, keyed by output path.
+
+        Includes whatever manifests the target ecosystem needs, not just the
+        translated sources.
+        """
+        ...
+
+    def output_path(self, source_path: str) -> str:
+        """The output path for a source path, without generating anything."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
