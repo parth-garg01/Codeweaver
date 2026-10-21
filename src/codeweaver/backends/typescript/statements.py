@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.exceptions import (
     COLLAPSED_TO_ERROR,
@@ -26,7 +27,6 @@ from codeweaver.backends.typescript.exceptions import (
 from codeweaver.backends.typescript.expressions import emit_expression
 from codeweaver.backends.typescript.naming import escape_string, safe_identifier
 from codeweaver.backends.typescript.types import render_type
-from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.ir.base import IRNode, IRUnsupported
 from codeweaver.ir.expressions import IRAttribute, IRCall, IRIndex, IRName
 from codeweaver.ir.operators import BinaryOp

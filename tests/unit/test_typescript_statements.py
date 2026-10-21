@@ -3,9 +3,9 @@ from __future__ import annotations
 import ast
 import unittest
 
+from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.typescript.context import UNSUPPORTED_MARKER, EmitContext
 from codeweaver.backends.typescript.statements import emit_statement
-from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.statements import convert_statements
 from codeweaver.ir.expressions import IRLiteral, IRName

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
+from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.exceptions import (
     is_builtin_exception,
@@ -24,7 +25,6 @@ from codeweaver.backends.typescript.expressions import emit_expression, emit_par
 from codeweaver.backends.typescript.naming import safe_identifier, safe_property
 from codeweaver.backends.typescript.statements import emit_block, emit_statement
 from codeweaver.backends.typescript.types import render_return_type, render_type
-from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.declarations import (
     ACCESSOR_GETTER,
