@@ -26,7 +26,15 @@ from codeweaver.backends.typescript.statements import emit_block, emit_statement
 from codeweaver.backends.typescript.types import render_return_type, render_type
 from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.diagnostics import DiagnosticBag
-from codeweaver.ir.declarations import IRClass, IRFunction, IRImport, IRModule, Visibility
+from codeweaver.ir.declarations import (
+    ACCESSOR_GETTER,
+    ACCESSOR_SETTER,
+    IRClass,
+    IRFunction,
+    IRImport,
+    IRModule,
+    Visibility,
+)
 from codeweaver.ir.expressions import IRName
 from codeweaver.ir.statements import IRVarDecl
 from codeweaver.ir.types import TypeKind
@@ -271,6 +279,39 @@ def _emit_class(klass: IRClass, writer: CodeWriter, ctx: EmitContext) -> None:
     writer.line("}")
 
 
+def _decorator_is_applied(decorator, method: IRFunction) -> bool:
+    """Whether the backend turned *decorator* into a TypeScript modifier.
+
+    Repeating an applied decorator as a "not applied" comment would be wrong,
+    and for an accessor it would be actively misleading: ``@x.setter`` becomes
+    ``set x(...)``, so it was applied.
+    """
+    text = decorator.source_text.lstrip("@")
+    if text in _HANDLED_DECORATORS:
+        return True
+    return method.is_accessor and text.endswith((".setter", ".getter"))
+
+
+def _setter_parameter(method: IRFunction, ctx: EmitContext) -> str:
+    """The single parameter of a generated setter.
+
+    Python allows a setter to take any name; TypeScript allows exactly one
+    parameter and no return type.  A setter with the wrong arity is reported
+    rather than emitted as something that would not compile.
+    """
+    if len(method.params) != 1:
+        ctx.warn(
+            "CW0643",
+            f"property setter {method.name!r} takes {len(method.params)} parameter(s); "
+            "a setter must take exactly one",
+            span=method.span,
+            hint="the first parameter is used and the rest are dropped",
+        )
+    if not method.params:
+        return "value: unknown"
+    return emit_params(method.params[:1], ctx)
+
+
 def _base_class_name(base, ctx: EmitContext) -> str:
     """Render a base class, mapping a builtin Python exception onto Error.
 
@@ -318,7 +359,7 @@ def _emit_method(method: IRFunction, writer: CodeWriter, ctx: EmitContext) -> No
     if method.docstring:
         _emit_doc_comment(method.docstring, writer)
     for decorator in method.decorators:
-        if decorator.source_text.lstrip("@") in _HANDLED_DECORATORS:
+        if _decorator_is_applied(decorator, method):
             continue
         writer.line(f"// decorator not applied: {decorator.source_text or '<expression>'}")
     modifiers: list[str] = []
@@ -335,12 +376,20 @@ def _emit_method(method: IRFunction, writer: CodeWriter, ctx: EmitContext) -> No
     params = emit_params(method.params, ctx)
     if method.is_constructor:
         header = f"constructor({params})"
+    elif method.accessor == ACCESSOR_GETTER:
+        returns = render_return_type(method.return_type)
+        modifiers.append("get")
+        header = f"{safe_property(method.name)}(): {returns}"
+    elif method.accessor == ACCESSOR_SETTER:
+        # A TypeScript setter takes exactly one parameter and must not declare
+        # a return type, so neither is emitted from the IR verbatim.
+        modifiers.append("set")
+        parameter = _setter_parameter(method, ctx)
+        header = f"{safe_property(method.name)}({parameter})"
     else:
         returns = render_return_type(method.return_type)
         if method.is_async and not returns.startswith("Promise<"):
             returns = f"Promise<{returns}>"
-        if method.meta.get("pythonProperty"):
-            modifiers.append("get")
         header = f"{safe_property(method.name)}({params}): {returns}"
     prefix = f"{' '.join(modifiers)} " if modifiers else ""
     if method.is_abstract:

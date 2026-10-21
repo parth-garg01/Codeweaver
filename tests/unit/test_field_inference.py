@@ -149,9 +149,11 @@ class PassTests(unittest.TestCase):
 
 
 class SchemaVersionTests(unittest.TestCase):
-    def test_schema_version_was_bumped_and_documented(self) -> None:
-        self.assertEqual(IR_SCHEMA_VERSION, "1.1.0")
+    def test_the_optional_field_change_is_documented(self) -> None:
+        # The version itself moves on as the schema grows; what matters here is
+        # that the change this feature made is recorded in the history.
         self.assertIn("optional", SCHEMA_HISTORY["1.1.0"])
+        self.assertIn(IR_SCHEMA_VERSION, SCHEMA_HISTORY)
 
     def test_earlier_schema_remains_readable(self) -> None:
         self.assertTrue(is_compatible("1.0.0"))

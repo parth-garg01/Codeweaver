@@ -91,7 +91,8 @@ class TypeScriptBackend:
         default_factory=lambda: (
             "modules with relative ESM imports",
             "exported constants, functions and classes",
-            "classes with single inheritance, fields, methods and getters",
+            "classes with single inheritance, fields and methods",
+            "property accessors as get/set",
             "constructors, including super() delegation",
             "async functions returning Promise<T>",
             "parameters with types, defaults and rest parameters",
