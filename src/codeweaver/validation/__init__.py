@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from codeweaver.validation.go import parse_go_output, run_build
 from codeweaver.validation.javascript import parse_node_output, run_syntax_check
 from codeweaver.validation.policy import ExecutionPolicy
 from codeweaver.validation.results import CheckOutcome, CheckResult, ValidationReport
@@ -31,8 +32,10 @@ __all__ = [
     "ValidationReport",
     "detect_toolchain",
     "detect_toolchains",
+    "parse_go_output",
     "parse_node_output",
     "parse_tsc_output",
+    "run_build",
     "run_syntax_check",
     "run_typecheck",
     "validate_project",
@@ -41,6 +44,7 @@ __all__ = [
 #: Tools CodeWeaver looks for when validating each target's output.
 TYPESCRIPT_TOOLS: tuple[str, ...] = ("tsc", "node", "npm")
 JAVASCRIPT_TOOLS: tuple[str, ...] = ("node", "npm")
+GO_TOOLS: tuple[str, ...] = ("go",)
 
 #: target -> (toolchains to look for, the check to run).
 #:
@@ -50,6 +54,7 @@ JAVASCRIPT_TOOLS: tuple[str, ...] = ("node", "npm")
 _VALIDATORS: dict[str, tuple[tuple[str, ...], Callable[..., CheckResult]]] = {
     "typescript": (TYPESCRIPT_TOOLS, run_typecheck),
     "javascript": (JAVASCRIPT_TOOLS, run_syntax_check),
+    "go": (GO_TOOLS, run_build),
 }
 
 

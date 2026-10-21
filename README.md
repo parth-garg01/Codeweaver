@@ -18,11 +18,17 @@ you exactly what it did not.
 | ------ | ------ | ------ | -------------- |
 | Python 3.11+ | TypeScript 5 | partial | `tsc --noEmit`, strict |
 | Python 3.11+ | JavaScript (ES2022) | partial | `node --check` only |
+| Python 3.11+ | Go 1.22+ | partial | `go build` + `go vet` |
 
-The two targets share a code generator and translate the same constructs, but
-they do not earn the same confidence: TypeScript output is type-checked, while
-JavaScript output is only parsed. The report always names the check that
-actually ran.
+Different targets earn different confidence, and the report always names the
+check that actually ran: TypeScript output is type-checked, Go output is
+compiled and vetted, JavaScript output is only parsed. Nothing executes your
+translated program.
+
+Go is the furthest from Python and the differences are correspondingly larger —
+`try`/`except` is reported rather than translated, inheritance becomes struct
+embedding without virtual dispatch, and exported names are capitalised. All of
+it is listed in the support matrix.
 
 `partial` is not a softer word for `supported`. A deliberately scoped set of
 constructs is translated; everything else produces a diagnostic, a
@@ -60,6 +66,7 @@ codeweaver analyze ./my-project      # parse, index symbols, build the graph
 codeweaver plan   ./my-project --to typescript
 codeweaver migrate ./my-project --to typescript --out ../my-project-ts
 codeweaver migrate ./my-project --to javascript --out ../my-project-js
+codeweaver migrate ./my-project --to go         --out ../my-project-go
 codeweaver validate ../my-project-ts
 codeweaver report ./my-project --format markdown
 ```

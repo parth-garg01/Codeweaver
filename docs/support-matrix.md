@@ -7,6 +7,7 @@ parsing, IR mapping, code generation and target-toolchain validation.
 | ------ | ------ | ------ | -------------- | ----- |
 | Python 3.11+ | TypeScript 5 | partial | `tsc --noEmit` (strict) | Documented construct subset. Unsupported constructs are reported, never approximated. |
 | Python 3.11+ | JavaScript (ES2022) | partial | `node --check` | Same construct coverage with annotations erased. **The check is weaker:** a syntax check cannot see a type error. |
+| Python 3.11+ | Go 1.22+ | partial | `go build ./...` then `go vet ./...` | Classes become structs with pointer receivers. `try`/`except` is **not** translated. |
 
 ### A word on what "validated" means per target
 
@@ -20,8 +21,75 @@ They do **not** give you the same confidence:
   syntactically valid and nothing more. Every type error the TypeScript target
   would have caught passes silently here.
 
-If you have a choice, migrate to TypeScript and strip the types afterwards. The
-JavaScript target exists for projects that cannot take the dependency.
+- Go output is compiled by the Go compiler, which is stricter than most: an
+  unused import, an unused variable, a missing return or a type mismatch all
+  fail the build. A passing `go build` is strong evidence of internal
+  consistency. `go vet` then adds format-string checking, which matters because
+  f-strings become `fmt.Sprintf`.
+
+Nothing executes the translated program. `go build` compiles, `node --check`
+parses and `tsc --noEmit` type-checks; none of them run your code.
+
+If you have a choice between the two ECMAScript targets, migrate to TypeScript
+and strip the types afterwards. The JavaScript target exists for projects that
+cannot take the dependency.
+
+## Python → Go
+
+Go is the furthest of the targets from Python, so the differences are larger
+and worth reading before using the output.
+
+### Translated
+
+- Packages, one per source directory, with project imports resolved. Modules in
+  the same directory share a package, so a Python import cycle between them
+  disappears rather than becoming an illegal Go import cycle.
+- Package-level constants and variables; functions with typed parameters and
+  results.
+- Classes as structs. Methods take a **pointer receiver**, because Python
+  objects have reference semantics and a value receiver would mutate a copy.
+- `__init__` as a `NewT` constructor returning a pointer; a class with no
+  `__init__` still gets one, because a class call generates `NewT(...)`.
+- Class attribute defaults, assigned in the constructor — a Go struct field
+  cannot have a default, so the value would otherwise be silently lost.
+- Property accessors as `GetX` / `SetX` methods.
+- `f`-strings as `fmt.Sprintf` with `%v` holes.
+- Membership tests as `slices.Contains`, `strings.Contains` or a comma-ok map
+  index, chosen from the container's type.
+- Mixed `int`/`float` arithmetic, with the `float64` conversion Python
+  performed implicitly inserted explicitly.
+- `assert` as a guarded `panic`.
+
+### Reported, not translated
+
+| Construct | Reason |
+| --------- | ------ |
+| `try` / `except` / `finally` | Go returns errors as values. `defer`/`recover` would turn ordinary control flow into panic handling and resume somewhere else. |
+| `a @ b` | No matrix-multiply operator |
+| Stepped slices | No equivalent slice form |
+| `del x` on a binding | No equivalent |
+| Keyword and spread arguments | Go has neither |
+
+### Behaviour differences the report always flags
+
+- **`raise` becomes `panic`**, which is not how Go reports an expected failure.
+- **A builtin exception loses its type**: `ValueError("x")` becomes
+  `errors.New("x")`, so a translated program can no longer tell `ValueError`
+  from `KeyError`. A project's own exception class keeps its identity.
+- **Inheritance becomes struct embedding.** Fields and methods are promoted,
+  but there is no virtual dispatch: an overridden method is *not* called
+  through a base-typed value.
+- **`int` becomes a 64-bit `int`**, losing Python's arbitrary precision.
+- **Integer division truncates toward zero** rather than flooring, so it
+  disagrees with Python whenever an operand is negative.
+- **Parameter defaults have no equivalent**; callers must pass the value.
+- **A conditional expression** becomes an immediately called function.
+- **Tuples become `[]any`**, losing the element types.
+- **`async` functions become ordinary functions**; Go uses goroutines, so
+  callers will not await them.
+- **Exported names are capitalised.** This is the only renaming CodeWeaver
+  does anywhere, and it is forced: Go decides visibility by the first letter.
+  Every rename is listed in the report.
 
 The generated project is checked with `tsc --noEmit` under `strict`. The one
 strictness option left off is `noUncheckedIndexedAccess`: it models a language
