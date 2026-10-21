@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from codeweaver.diagnostics import DiagnosticBag, SourceSpan
+from codeweaver.project_intake.textio import read_project_text
 
 __all__ = [
     "MANIFEST_FILENAMES",
@@ -102,7 +103,7 @@ def _read_manifest(path: Path, ecosystem: str, bag: DiagnosticBag) -> Manifest:
 
 
 def _read_pyproject(path: Path, manifest: Manifest) -> None:
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    data = tomllib.loads(read_project_text(path))
     project = data.get("project") or {}
     manifest.project_name = str(project.get("name", ""))
     manifest.version = str(project.get("version", ""))
@@ -119,7 +120,7 @@ def _read_pyproject(path: Path, manifest: Manifest) -> None:
 
 
 def _read_requirements(path: Path, manifest: Manifest) -> None:
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_project_text(path).splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith(("#", "-")):
             continue
@@ -129,7 +130,7 @@ def _read_requirements(path: Path, manifest: Manifest) -> None:
 
 
 def _read_package_json(path: Path, manifest: Manifest) -> None:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(read_project_text(path))
     if not isinstance(data, dict):
         raise ValueError("package.json must contain an object")
     manifest.project_name = str(data.get("name", ""))
@@ -139,7 +140,7 @@ def _read_package_json(path: Path, manifest: Manifest) -> None:
 
 
 def _read_go_mod(path: Path, manifest: Manifest) -> None:
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_project_text(path).splitlines():
         stripped = line.strip()
         if stripped.startswith("module "):
             manifest.project_name = stripped.removeprefix("module ").strip()
@@ -150,7 +151,7 @@ def _read_go_mod(path: Path, manifest: Manifest) -> None:
 
 
 def _read_cargo_toml(path: Path, manifest: Manifest) -> None:
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    data = tomllib.loads(read_project_text(path))
     package = data.get("package") or {}
     manifest.project_name = str(package.get("name", ""))
     manifest.version = str(package.get("version", ""))
