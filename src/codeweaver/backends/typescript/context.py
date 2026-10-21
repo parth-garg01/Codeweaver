@@ -29,6 +29,11 @@ class EmitContext:
     #: Name of the method receiver in the body being emitted (Python's
     #: ``self``/``cls``).  References to it become ``this``.
     receiver: str = ""
+    #: Dotted module path -> the local name its namespace import bound, for the
+    #: module being emitted.  A reference such as ``pkg.util.helper`` has to be
+    #: rewritten to that binding, because the import statement introduced one
+    #: name rather than a package object.
+    namespace_imports: dict[str, str] = field(default_factory=dict)
 
     def record_gap(self, node: IRUnsupported) -> str:
         """Record an unsupported node and return the marker comment text."""

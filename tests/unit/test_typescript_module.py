@@ -113,7 +113,9 @@ class ImportEmitTests(unittest.TestCase):
             ir_module("import pkg.util\n", "pkg/app.py"),
         ]
         generated = generate_module(modules[1], ModuleLayout.for_modules(modules))
-        self.assertIn("import * as util from", generated.contents)
+        # The binding is the flattened dotted path, so two modules whose
+        # last component matches cannot collide (see issue #2).
+        self.assertIn('import * as pkg_util from "./util";', generated.contents)
 
     def test_external_import_is_reported(self) -> None:
         generated = generate("import os\n")

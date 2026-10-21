@@ -132,6 +132,7 @@ def generate_module(
         diagnostics=diagnostics if diagnostics is not None else DiagnosticBag(),
     )
     writer = CodeWriter()
+    ctx.namespace_imports = _namespace_bindings(module)
 
     for line in _HEADER:
         writer.line(line.format(source=module.path or module.name))
@@ -162,6 +163,27 @@ def generate_module(
     )
 
 
+def _namespace_bindings(module: IRModule) -> dict[str, str]:
+    """Dotted module path -> local binding, for this module's namespace imports.
+
+    Both the absolute path and the path as written are recorded, because a
+    relative ``import`` is referenced by the name the source used.
+    """
+    from codeweaver.graph.dependency import resolve_relative_import
+
+    bindings: dict[str, str] = {}
+    for imported in module.imports:
+        if not imported.imports_whole_module:
+            continue
+        binding = imported.local_binding
+        if imported.module:
+            bindings[imported.module] = binding
+        absolute = resolve_relative_import(module.name, imported.module, imported.level)
+        if absolute:
+            bindings[absolute] = binding
+    return bindings
+
+
 def _emit_doc_comment(text: str, writer: CodeWriter) -> None:
     writer.line("/**")
     for line in text.strip().split("\n"):
@@ -190,7 +212,9 @@ def _emit_import(
         specifier = absolute or imported.module
     quoted = f'"{specifier}"'
     if imported.imports_whole_module:
-        alias = safe_identifier(imported.module_alias or absolute.split(".")[-1])
+        # The binding comes from the IR so that the import statement and every
+        # reference that reaches through it agree on one name.
+        alias = safe_identifier(imported.local_binding)
         writer.line(f"import * as {alias} from {quoted};", imported.span)
         return
     names = ", ".join(

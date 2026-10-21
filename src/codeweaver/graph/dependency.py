@@ -304,7 +304,9 @@ def _local_bindings(module: IRModule, index: SymbolIndex) -> dict[str, str]:
             if symbol is not None:
                 bindings[name.local_name] = symbol.id
         if imported.imports_whole_module and target in set(index.modules()):
-            bindings[imported.module_alias or target.split(".")[0]] = target
+            # Use the binding the IR defines, so the graph and the backends
+            # cannot disagree about the local name an import introduced.
+            bindings[imported.local_binding] = target
     return bindings
 
 
