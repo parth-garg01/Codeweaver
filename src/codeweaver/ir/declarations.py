@@ -17,6 +17,8 @@ from codeweaver.ir.statements import IRBlock, StatementSlot
 from codeweaver.ir.types import IRType, t_unknown
 
 __all__ = [
+    "ACCESSOR_GETTER",
+    "ACCESSOR_SETTER",
     "IRClass",
     "IRDecorator",
     "IRField",
@@ -49,6 +51,11 @@ class Visibility:
         if name.startswith("_"):
             return Visibility.PROTECTED
         return Visibility.PUBLIC
+
+
+#: ``IRFunction.accessor`` values.  Empty means an ordinary method.
+ACCESSOR_GETTER = "getter"
+ACCESSOR_SETTER = "setter"
 
 
 @ir_node
@@ -154,9 +161,22 @@ class IRFunction(IRNode):
     is_method: bool = False
     is_constructor: bool = False
     is_abstract: bool = False
+    #: ``""`` for an ordinary method, otherwise :data:`ACCESSOR_GETTER` or
+    #: :data:`ACCESSOR_SETTER`.
+    #:
+    #: A getter and a setter share a name on purpose — they are two halves of
+    #: one property, not two methods — so the duplicate-name rule in
+    #: :mod:`codeweaver.ir.schema` has to be able to tell them apart.  Without
+    #: this field a ``@property`` / ``@x.setter`` pair made the whole module
+    #: invalid.
+    accessor: str = ""
     decorators: list[IRDecorator] = field(default_factory=list)
     docstring: str = ""
     visibility: str = Visibility.PUBLIC
+
+    @property
+    def is_accessor(self) -> bool:
+        return bool(self.accessor)
 
     @property
     def arity(self) -> int:
@@ -182,8 +202,28 @@ class IRClass(IRNode):
     is_interface: bool = False
     visibility: str = Visibility.PUBLIC
 
-    def method_named(self, name: str) -> IRFunction | None:
-        return next((method for method in self.methods if method.name == name), None)
+    def method_named(self, name: str, accessor: str = "") -> IRFunction | None:
+        """The method called *name*, optionally restricted to one accessor half.
+
+        With no *accessor* the first match wins, which for a property pair is
+        the getter.
+        """
+        return next(
+            (
+                method
+                for method in self.methods
+                if method.name == name and (not accessor or method.accessor == accessor)
+            ),
+            None,
+        )
+
+    def accessor_pairs(self) -> dict[str, dict[str, IRFunction]]:
+        """Property name -> its accessor halves, keyed ``getter``/``setter``."""
+        pairs: dict[str, dict[str, IRFunction]] = {}
+        for method in self.methods:
+            if method.accessor:
+                pairs.setdefault(method.name, {})[method.accessor] = method
+        return pairs
 
     @property
     def constructor(self) -> IRFunction | None:

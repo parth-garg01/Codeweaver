@@ -14,6 +14,7 @@ available for the places that genuinely cannot continue.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 
 from codeweaver.diagnostics import DiagnosticBag, SourceSpan
 from codeweaver.errors import IRSchemaError
@@ -183,13 +184,40 @@ def _validate_class(node: IRClass, bag: DiagnosticBag, span: SourceSpan | None) 
         what=f"field of {node.name!r}",
         span=span,
     )
+    # A getter and a setter share a name because they are two halves of one
+    # property.  Keying on (name, accessor) keeps CW0315 meaningful for a
+    # genuinely duplicated method while allowing the pair.
     _check_duplicates(
-        [method.name for method in node.methods],
+        [f"{method.name}|{method.accessor}" for method in node.methods],
         bag=bag,
         code="CW0315",
         what=f"method of {node.name!r}",
         span=span,
+        label=lambda key: key.split("|", 1)[0],
     )
+    for property_name, halves in node.accessor_pairs().items():
+        plain = [
+            method
+            for method in node.methods
+            if method.name == property_name and not method.accessor
+        ]
+        if plain:
+            bag.error(
+                "CW0328",
+                f"{node.name}.{property_name} is declared both as a property "
+                "accessor and as an ordinary method",
+                stage="ir-validate",
+                span=span,
+            )
+        setter = halves.get("setter")
+        if setter is not None and "getter" not in halves:
+            bag.warning(
+                "CW0329",
+                f"{node.name}.{property_name} has a setter but no getter",
+                stage="ir-validate",
+                span=setter.span or span,
+                hint="most targets require the getter half as well",
+            )
     constructors = [method for method in node.methods if method.is_constructor]
     if len(constructors) > 1:
         bag.error(
@@ -327,12 +355,19 @@ def _check_duplicates(
     code: str,
     what: str,
     span: SourceSpan | None,
+    label: Callable[[str], str] | None = None,
 ) -> None:
+    """Report any name that appears more than once.
+
+    *label* lets a caller key on a composite string while reporting the part a
+    reader cares about.
+    """
     for name, count in sorted(Counter(filter(None, names)).items()):
         if count > 1:
+            reported = label(name) if label is not None else name
             bag.error(
                 code,
-                f"duplicate {what}: {name!r} declared {count} times",
+                f"duplicate {what}: {reported!r} declared {count} times",
                 stage="ir-validate",
                 span=span,
             )

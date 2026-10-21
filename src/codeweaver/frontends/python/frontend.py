@@ -18,6 +18,8 @@ from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.expressions import convert_expression, convert_params
 from codeweaver.frontends.python.statements import convert_block, convert_statement
 from codeweaver.ir.declarations import (
+    ACCESSOR_GETTER,
+    ACCESSOR_SETTER,
     IRClass,
     IRDecorator,
     IRField,
@@ -39,7 +41,16 @@ __all__ = [
 
 #: Decorators the frontend understands well enough to act on.
 _RECOGNISED_DECORATORS = frozenset(
-    {"staticmethod", "classmethod", "property", "abstractmethod", "dataclass"}
+    {
+        "staticmethod",
+        "classmethod",
+        "property",
+        "abstractmethod",
+        "dataclass",
+        "setter",
+        "getter",
+        "deleter",
+    }
 )
 
 #: Parameter names treated as the method receiver and removed from the IR
@@ -189,12 +200,29 @@ def _convert_function(
     )
     if receiver:
         function.meta["pythonReceiver"] = receiver
+    function.accessor = _accessor_kind(node, names)
     if "classmethod" in names:
         function.meta["pythonClassMethod"] = True
     if "property" in names:
         function.meta["pythonProperty"] = True
     _report_unrecognised_decorators(function, names, ctx, node)
     return function
+
+
+def _accessor_kind(node: ast.stmt, decorator_names: set[str]) -> str:
+    """Which half of a property this definition is, if either.
+
+    ``@property`` is a getter.  ``@<name>.setter`` is a setter — the decorator
+    is an attribute access on the property object, so the frontend matches on
+    the attribute rather than on a bare name.  A ``@deleter`` has no mapping in
+    the IR and is left as an ordinary method so the backend reports it.
+    """
+    if "property" in decorator_names:
+        return ACCESSOR_GETTER
+    for decorator in getattr(node, "decorator_list", []):
+        if isinstance(decorator, ast.Attribute) and decorator.attr == "setter":
+            return ACCESSOR_SETTER
+    return ""
 
 
 def _convert_class(node: ast.ClassDef, ctx: ConversionContext) -> IRClass:
@@ -322,6 +350,7 @@ class PythonFrontend:
         "module-level constants and variables",
         "functions and async functions",
         "classes, methods, constructors, class and instance fields",
+        "properties: @property getters and @x.setter setters",
         "parameters with annotations, defaults, *args and **kwargs",
         "arithmetic, bitwise, logical and comparison expressions",
         "calls, attribute access, indexing and slicing",
