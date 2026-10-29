@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.base import IRNode
 from codeweaver.ir.declarations import IRModule
-from codeweaver.ir.expressions import IRCall, IRLiteral, IRName
+from codeweaver.ir.expressions import ExpressionSlot, IRCall, IRLiteral, IRName
 from codeweaver.ir.statements import IRForEach, IRForRange
 from codeweaver.ir.types import t_int
 from codeweaver.transforms.rewrite import rewrite, rewrite_all
@@ -26,7 +26,7 @@ from codeweaver.transforms.rewrite import rewrite, rewrite_all
 __all__ = ["RangeLoopPass", "lower_range_loops"]
 
 
-def _range_arguments(iterable: IRNode) -> list[IRNode] | None:
+def _range_arguments(iterable: IRNode) -> list[ExpressionSlot] | None:
     """Positional arguments of a ``range(...)`` call, or ``None``."""
     if not isinstance(iterable, IRCall):
         return None
@@ -49,6 +49,9 @@ def _lower(node: IRNode) -> IRNode | None:
         # for/else is already reported by the backend; rewriting the loop shape
         # here would lose the else body before that report happens.
         return None
+    start: ExpressionSlot
+    stop: ExpressionSlot
+    step: ExpressionSlot | None
     if len(args) == 1:
         start, stop, step = IRLiteral(0, value_type=t_int()), args[0], None
     elif len(args) == 2:

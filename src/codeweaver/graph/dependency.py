@@ -300,9 +300,9 @@ def _local_bindings(module: IRModule, index: SymbolIndex) -> dict[str, str]:
     for imported in module.imports:
         target = resolve_relative_import(module.name, imported.module, imported.level)
         for name in imported.names:
-            symbol = index.resolve_in_module(target, name.name)
-            if symbol is not None:
-                bindings[name.local_name] = symbol.id
+            imported_symbol = index.resolve_in_module(target, name.name)
+            if imported_symbol is not None:
+                bindings[name.local_name] = imported_symbol.id
         if imported.imports_whole_module and target in set(index.modules()):
             bindings[imported.module_alias or target.split(".")[0]] = target
     return bindings

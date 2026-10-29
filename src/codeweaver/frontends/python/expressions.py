@@ -9,11 +9,14 @@ behaviour rather than a reported gap.
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
+from typing import Any
 
 from codeweaver.frontends.python.annotations import infer_literal_type
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.ir.base import IRUnsupported
 from codeweaver.ir.expressions import (
+    ExpressionSlot,
     IRArrayLiteral,
     IRAttribute,
     IRAwait,
@@ -22,7 +25,6 @@ from codeweaver.ir.expressions import (
     IRCompare,
     IRComprehension,
     IRConditional,
-    IRExpression,
     IRIndex,
     IRKeyword,
     IRLambda,
@@ -86,7 +88,12 @@ COMPARE_OPS: dict[type[ast.cmpop], CompareOp] = {
 }
 
 
-def convert_expression(node: ast.expr, ctx: ConversionContext) -> IRExpression | IRUnsupported:
+#: Signature every expression handler shares.  Typed so that looking a handler
+#: up and calling it is checkable, rather than a call on ``object``.
+_Handler = Callable[[Any, ConversionContext], "ExpressionSlot"]
+
+
+def convert_expression(node: ast.expr, ctx: ConversionContext) -> ExpressionSlot:
     """Convert one Python expression."""
     handler = _HANDLERS.get(type(node))
     if handler is None:
@@ -94,7 +101,7 @@ def convert_expression(node: ast.expr, ctx: ConversionContext) -> IRExpression |
     return handler(node, ctx)
 
 
-def _constant(node: ast.Constant, ctx: ConversionContext) -> IRExpression:
+def _constant(node: ast.Constant, ctx: ConversionContext) -> ExpressionSlot:
     if node.value is Ellipsis:
         return IRLiteral(
             None,
@@ -111,13 +118,13 @@ def _constant(node: ast.Constant, ctx: ConversionContext) -> IRExpression:
     )
 
 
-def _name(node: ast.Name, ctx: ConversionContext) -> IRExpression:
+def _name(node: ast.Name, ctx: ConversionContext) -> ExpressionSlot:
     if node.id in ("True", "False"):  # pragma: no cover - parsed as Constant in py3
         return IRLiteral(node.id == "True", value_type=t_bool(), span=ctx.span(node))
     return IRName(node.id, span=ctx.span(node))
 
 
-def _binop(node: ast.BinOp, ctx: ConversionContext) -> IRExpression | IRUnsupported:
+def _binop(node: ast.BinOp, ctx: ConversionContext) -> ExpressionSlot:
     op = BINARY_OPS.get(type(node.op))
     if op is None:
         return ctx.unsupported(node, f"binary operator {type(node.op).__name__} has no IR mapping")
@@ -129,7 +136,7 @@ def _binop(node: ast.BinOp, ctx: ConversionContext) -> IRExpression | IRUnsuppor
     )
 
 
-def _unaryop(node: ast.UnaryOp, ctx: ConversionContext) -> IRExpression | IRUnsupported:
+def _unaryop(node: ast.UnaryOp, ctx: ConversionContext) -> ExpressionSlot:
     op = UNARY_OPS.get(type(node.op))
     if op is None:  # pragma: no cover - every unaryop is mapped
         return ctx.unsupported(node, "unary operator has no IR mapping")
@@ -139,7 +146,7 @@ def _unaryop(node: ast.UnaryOp, ctx: ConversionContext) -> IRExpression | IRUnsu
     )
 
 
-def _boolop(node: ast.BoolOp, ctx: ConversionContext) -> IRExpression:
+def _boolop(node: ast.BoolOp, ctx: ConversionContext) -> ExpressionSlot:
     op = LogicalOp.AND if isinstance(node.op, ast.And) else LogicalOp.OR
     return IRLogical(
         op,
@@ -148,7 +155,7 @@ def _boolop(node: ast.BoolOp, ctx: ConversionContext) -> IRExpression:
     )
 
 
-def _compare(node: ast.Compare, ctx: ConversionContext) -> IRExpression | IRUnsupported:
+def _compare(node: ast.Compare, ctx: ConversionContext) -> ExpressionSlot:
     """Convert a comparison, expanding Python's chained form.
 
     ``a < b < c`` means ``a < b and b < c`` with ``b`` evaluated once.  The IR
@@ -157,7 +164,7 @@ def _compare(node: ast.Compare, ctx: ConversionContext) -> IRExpression | IRUnsu
     effects, so an expanded chain over a call is reported.
     """
     operands = [node.left, *node.comparators]
-    parts: list[IRExpression] = []
+    parts: list[ExpressionSlot] = []
     for index, operator in enumerate(node.ops):
         op = COMPARE_OPS.get(type(operator))
         if op is None:  # pragma: no cover - every cmpop is mapped
@@ -186,16 +193,16 @@ def _compare(node: ast.Compare, ctx: ConversionContext) -> IRExpression | IRUnsu
     return IRLogical(LogicalOp.AND, parts, value_type=t_bool(), span=ctx.span(node))
 
 
-def _call(node: ast.Call, ctx: ConversionContext) -> IRExpression:
-    args: list[IRExpression] = []
-    star_args: list[IRExpression] = []
+def _call(node: ast.Call, ctx: ConversionContext) -> ExpressionSlot:
+    args: list[ExpressionSlot] = []
+    star_args: list[ExpressionSlot] = []
     for argument in node.args:
         if isinstance(argument, ast.Starred):
             star_args.append(convert_expression(argument.value, ctx))
         else:
             args.append(convert_expression(argument, ctx))
     keywords: list[IRKeyword] = []
-    star_keywords: list[IRExpression] = []
+    star_keywords: list[ExpressionSlot] = []
     for keyword in node.keywords:
         value = convert_expression(keyword.value, ctx)
         if keyword.arg is None:
@@ -212,11 +219,11 @@ def _call(node: ast.Call, ctx: ConversionContext) -> IRExpression:
     )
 
 
-def _attribute(node: ast.Attribute, ctx: ConversionContext) -> IRExpression:
+def _attribute(node: ast.Attribute, ctx: ConversionContext) -> ExpressionSlot:
     return IRAttribute(convert_expression(node.value, ctx), node.attr, span=ctx.span(node))
 
 
-def _subscript(node: ast.Subscript, ctx: ConversionContext) -> IRExpression:
+def _subscript(node: ast.Subscript, ctx: ConversionContext) -> ExpressionSlot:
     target = convert_expression(node.value, ctx)
     if isinstance(node.slice, ast.Slice):
         sliced = node.slice
@@ -230,19 +237,19 @@ def _subscript(node: ast.Subscript, ctx: ConversionContext) -> IRExpression:
     return IRIndex(target, convert_expression(node.slice, ctx), span=ctx.span(node))
 
 
-def _list(node: ast.List, ctx: ConversionContext) -> IRExpression:
+def _list(node: ast.List, ctx: ConversionContext) -> ExpressionSlot:
     return IRArrayLiteral(_elements(node.elts, ctx), value_type=t_list(), span=ctx.span(node))
 
 
-def _tuple(node: ast.Tuple, ctx: ConversionContext) -> IRExpression:
+def _tuple(node: ast.Tuple, ctx: ConversionContext) -> ExpressionSlot:
     return IRTupleLiteral(_elements(node.elts, ctx), span=ctx.span(node))
 
 
-def _set(node: ast.Set, ctx: ConversionContext) -> IRExpression:
+def _set(node: ast.Set, ctx: ConversionContext) -> ExpressionSlot:
     return IRSetLiteral(_elements(node.elts, ctx), value_type=t_set(), span=ctx.span(node))
 
 
-def _dict(node: ast.Dict, ctx: ConversionContext) -> IRExpression:
+def _dict(node: ast.Dict, ctx: ConversionContext) -> ExpressionSlot:
     entries: list[IRMapEntry] = []
     for key, value in zip(node.keys, node.values, strict=True):
         if key is None:
@@ -265,8 +272,8 @@ def _dict(node: ast.Dict, ctx: ConversionContext) -> IRExpression:
     return IRMapLiteral(entries, value_type=t_dict(), span=ctx.span(node))
 
 
-def _joined_str(node: ast.JoinedStr, ctx: ConversionContext) -> IRExpression:
-    parts: list[IRExpression] = []
+def _joined_str(node: ast.JoinedStr, ctx: ConversionContext) -> ExpressionSlot:
+    parts: list[ExpressionSlot] = []
     for value in node.values:
         if isinstance(value, ast.Constant):
             parts.append(IRLiteral(value.value, value_type=t_str(), span=ctx.span(value)))
@@ -277,7 +284,7 @@ def _joined_str(node: ast.JoinedStr, ctx: ConversionContext) -> IRExpression:
     return IRTemplateString(parts, value_type=t_str(), span=ctx.span(node))
 
 
-def _formatted_value(node: ast.FormattedValue, ctx: ConversionContext) -> IRExpression:
+def _formatted_value(node: ast.FormattedValue, ctx: ConversionContext) -> ExpressionSlot:
     if node.format_spec is not None or node.conversion not in (-1, None):
         return ctx.unsupported(
             node,
@@ -287,7 +294,7 @@ def _formatted_value(node: ast.FormattedValue, ctx: ConversionContext) -> IRExpr
     return convert_expression(node.value, ctx)
 
 
-def _lambda(node: ast.Lambda, ctx: ConversionContext) -> IRExpression:
+def _lambda(node: ast.Lambda, ctx: ConversionContext) -> ExpressionSlot:
     return IRLambda(
         convert_params(node.args, ctx),
         convert_expression(node.body, ctx),
@@ -295,7 +302,7 @@ def _lambda(node: ast.Lambda, ctx: ConversionContext) -> IRExpression:
     )
 
 
-def _ifexp(node: ast.IfExp, ctx: ConversionContext) -> IRExpression:
+def _ifexp(node: ast.IfExp, ctx: ConversionContext) -> ExpressionSlot:
     return IRConditional(
         convert_expression(node.test, ctx),
         convert_expression(node.body, ctx),
@@ -304,7 +311,7 @@ def _ifexp(node: ast.IfExp, ctx: ConversionContext) -> IRExpression:
     )
 
 
-def _await(node: ast.Await, ctx: ConversionContext) -> IRExpression:
+def _await(node: ast.Await, ctx: ConversionContext) -> ExpressionSlot:
     return IRAwait(convert_expression(node.value, ctx), span=ctx.span(node))
 
 
@@ -324,7 +331,7 @@ _COMPREHENSION_FORMS: dict[type[ast.AST], str] = {
 }
 
 
-def _comprehension(node: ast.expr, ctx: ConversionContext) -> IRExpression | IRUnsupported:
+def _comprehension(node: ast.expr, ctx: ConversionContext) -> ExpressionSlot:
     """Convert a comprehension, but only the single-clause shape.
 
     Nested ``for`` clauses, several ``if`` guards and ``async for`` change
@@ -402,8 +409,8 @@ def _named_expr(node: ast.NamedExpr, ctx: ConversionContext) -> IRUnsupported:
     )
 
 
-def _elements(nodes: list[ast.expr], ctx: ConversionContext) -> list[IRExpression]:
-    converted: list[IRExpression] = []
+def _elements(nodes: list[ast.expr], ctx: ConversionContext) -> list[ExpressionSlot]:
+    converted: list[ExpressionSlot] = []
     for element in nodes:
         if isinstance(element, ast.Starred):
             converted.append(ctx.unsupported(element, "spread inside a collection literal"))
@@ -463,7 +470,7 @@ def convert_params(args: ast.arguments, ctx: ConversionContext) -> list[IRParam]
     return params
 
 
-_HANDLERS: dict[type[ast.AST], object] = {
+_HANDLERS: dict[type[ast.AST], _Handler] = {
     ast.Constant: _constant,
     ast.Name: _name,
     ast.BinOp: _binop,

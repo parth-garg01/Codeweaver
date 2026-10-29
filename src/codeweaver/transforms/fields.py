@@ -58,13 +58,15 @@ def _assigned_attributes(method: IRFunction) -> list[tuple[str, IRType]]:
     return found
 
 
-def _infer_type(value, by_param: dict[str, IRType]) -> IRType:
+def _infer_type(value: object, by_param: dict[str, IRType]) -> IRType:
     if isinstance(value, IRName):
         declared = by_param.get(value.name)
-        if _is_known(declared):
-            return declared  # type: ignore[return-value]
+        if declared is not None and _is_known(declared):
+            return declared
     observed = getattr(value, "value_type", None)
-    return observed if _is_known(observed) else t_unknown()
+    if isinstance(observed, IRType) and _is_known(observed):
+        return observed
+    return t_unknown()
 
 
 def assigned_attribute_types(klass: IRClass) -> dict[str, IRType]:

@@ -14,7 +14,9 @@ object.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from codeweaver.backends.typescript.builtins import map_builtin_call
 from codeweaver.backends.typescript.context import EmitContext
@@ -114,6 +116,10 @@ class Emitted:
 
     def __str__(self) -> str:
         return self.text
+
+
+#: Signature every expression emitter shares.
+_Handler = Callable[[Any, EmitContext], "Emitted"]
 
 
 def emit_expression(node: IRNode | None, ctx: EmitContext) -> Emitted:
@@ -254,8 +260,8 @@ def _call(node: IRCall, ctx: EmitContext) -> Emitted:
         and node.callee.name == "__init__"
         and _is_super(node.callee.target)
     ):
-        arguments = ", ".join(emit_expression(item, ctx).text for item in node.args)
-        return Emitted(f"super({arguments})", _MEMBER)
+        super_arguments = ", ".join(emit_expression(item, ctx).text for item in node.args)
+        return Emitted(f"super({super_arguments})", _MEMBER)
     arguments = [emit_expression(argument, ctx).text for argument in node.args]
     builtin = map_builtin_call(node, arguments, ctx)
     if builtin is not None:
@@ -444,7 +450,7 @@ def emit_params(params: list[IRParam], ctx: EmitContext) -> str:
     return ", ".join(rendered)
 
 
-_HANDLERS: dict[type[IRNode], object] = {
+_HANDLERS: dict[type[IRNode], _Handler] = {
     IRLiteral: _literal,
     IRName: _name,
     IRBinary: _binary,

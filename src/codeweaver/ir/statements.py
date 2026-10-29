@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from codeweaver.ir.base import IRNode, ir_node
-from codeweaver.ir.expressions import IRExpression
+from codeweaver.ir.base import IRNode, IRUnsupported, ir_node
+from codeweaver.ir.expressions import ExpressionSlot
 from codeweaver.ir.operators import BinaryOp
 from codeweaver.ir.types import IRType, t_unknown
 
@@ -31,6 +31,7 @@ __all__ = [
     "IRTry",
     "IRVarDecl",
     "IRWhile",
+    "StatementSlot",
 ]
 
 
@@ -41,6 +42,10 @@ class IRStatement(IRNode):
     kind: ClassVar[str] = "statement"
 
 
+#: What may stand where a statement is expected.  See :data:`ExpressionSlot`.
+StatementSlot = IRStatement | IRUnsupported
+
+
 @ir_node
 @dataclass
 class IRBlock(IRStatement):
@@ -48,7 +53,7 @@ class IRBlock(IRStatement):
 
     kind: ClassVar[str] = "block"
 
-    statements: list[IRStatement] = field(default_factory=list)
+    statements: list[StatementSlot] = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.statements)
@@ -63,7 +68,7 @@ class IRBlock(IRStatement):
 class IRExpressionStatement(IRStatement):
     kind: ClassVar[str] = "expression_statement"
 
-    expression: IRExpression
+    expression: ExpressionSlot
 
 
 @ir_node
@@ -80,7 +85,7 @@ class IRVarDecl(IRStatement):
 
     name: str
     var_type: IRType = field(default_factory=t_unknown)
-    value: IRExpression | None = None
+    value: ExpressionSlot | None = None
     is_const: bool = False
 
 
@@ -91,8 +96,8 @@ class IRAssign(IRStatement):
 
     kind: ClassVar[str] = "assign"
 
-    target: IRExpression
-    value: IRExpression
+    target: ExpressionSlot
+    value: ExpressionSlot
 
 
 @ir_node
@@ -101,8 +106,8 @@ class IRAugAssign(IRStatement):
     kind: ClassVar[str] = "aug_assign"
 
     op: BinaryOp
-    target: IRExpression
-    value: IRExpression
+    target: ExpressionSlot
+    value: ExpressionSlot
 
 
 @ir_node
@@ -110,7 +115,7 @@ class IRAugAssign(IRStatement):
 class IRReturn(IRStatement):
     kind: ClassVar[str] = "return"
 
-    value: IRExpression | None = None
+    value: ExpressionSlot | None = None
 
 
 @ir_node
@@ -118,7 +123,7 @@ class IRReturn(IRStatement):
 class IRIf(IRStatement):
     kind: ClassVar[str] = "if"
 
-    test: IRExpression
+    test: ExpressionSlot
     then_body: IRBlock = field(default_factory=IRBlock)
     else_body: IRBlock | None = None
 
@@ -128,7 +133,7 @@ class IRIf(IRStatement):
 class IRWhile(IRStatement):
     kind: ClassVar[str] = "while"
 
-    test: IRExpression
+    test: ExpressionSlot
     body: IRBlock = field(default_factory=IRBlock)
     #: Python's ``while ... else``.  Kept so a backend can lower or refuse it
     #: instead of dropping a branch that can legitimately run.
@@ -142,8 +147,8 @@ class IRForEach(IRStatement):
 
     kind: ClassVar[str] = "for_each"
 
-    target: IRExpression
-    iterable: IRExpression
+    target: ExpressionSlot
+    iterable: ExpressionSlot
     body: IRBlock = field(default_factory=IRBlock)
     else_body: IRBlock | None = None
 
@@ -161,9 +166,9 @@ class IRForRange(IRStatement):
     kind: ClassVar[str] = "for_range"
 
     variable: str
-    start: IRExpression
-    stop: IRExpression
-    step: IRExpression | None = None
+    start: ExpressionSlot
+    stop: ExpressionSlot
+    step: ExpressionSlot | None = None
     body: IRBlock = field(default_factory=IRBlock)
 
 
@@ -192,8 +197,8 @@ class IRNoOp(IRStatement):
 class IRThrow(IRStatement):
     kind: ClassVar[str] = "throw"
 
-    value: IRExpression | None = None
-    cause: IRExpression | None = None
+    value: ExpressionSlot | None = None
+    cause: ExpressionSlot | None = None
 
 
 @ir_node
@@ -207,7 +212,7 @@ class IRCatch(IRNode):
 
     kind: ClassVar[str] = "catch"
 
-    exception_types: list[IRExpression] = field(default_factory=list)
+    exception_types: list[ExpressionSlot] = field(default_factory=list)
     name: str = ""
     body: IRBlock = field(default_factory=IRBlock)
 
@@ -228,7 +233,7 @@ class IRTry(IRStatement):
 class IRDelete(IRStatement):
     kind: ClassVar[str] = "delete"
 
-    targets: list[IRExpression] = field(default_factory=list)
+    targets: list[ExpressionSlot] = field(default_factory=list)
 
 
 @ir_node
@@ -236,8 +241,8 @@ class IRDelete(IRStatement):
 class IRAssert(IRStatement):
     kind: ClassVar[str] = "assert"
 
-    test: IRExpression
-    message: IRExpression | None = None
+    test: ExpressionSlot
+    message: ExpressionSlot | None = None
 
 
 @ir_node

@@ -94,7 +94,7 @@ class IRNode:
             if info.name in data:
                 kwargs[info.name] = decode_value(data[info.name])
         span = data.get("span")
-        return cls(  # type: ignore[call-arg]
+        return cls(
             **kwargs,
             span=SourceSpan.from_dict(span) if span else None,
             meta=dict(data.get("meta") or {}),
