@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from codeweaver.backends.common.writer import CodeWriter, MappingEntry
 from codeweaver.backends.typescript.backend import (
     TypeScriptBackend,
     project_files,
@@ -16,7 +17,9 @@ from codeweaver.backends.typescript.module import (
 )
 
 __all__ = [
+    "CodeWriter",
     "GeneratedFile",
+    "MappingEntry",
     "ModuleLayout",
     "TypeScriptBackend",
     "generate_module",

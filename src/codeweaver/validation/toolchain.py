@@ -24,12 +24,24 @@ __all__ = ["Toolchain", "ToolchainIndex", "detect_toolchain", "detect_toolchains
 VERSION_TIMEOUT = 15.0
 
 #: tool name -> arguments that print its version.
+#:
+#: Not every tool accepts ``--version``: ``go`` wants a ``version``
+#: subcommand and rejects the flag outright, which made it look uninstalled.
+#: The default is ``--version`` for anything not listed.
 _VERSION_ARGS: dict[str, tuple[str, ...]] = {
     "tsc": ("--version",),
     "node": ("--version",),
     "npx": ("--version",),
     "npm": ("--version",),
     "prettier": ("--version",),
+    "go": ("version",),
+    "gofmt": ("-h",),
+    "java": ("-version",),
+    "javac": ("-version",),
+    "rustc": ("--version",),
+    "cargo": ("--version",),
+    "g++": ("--version",),
+    "gcc": ("--version",),
 }
 
 

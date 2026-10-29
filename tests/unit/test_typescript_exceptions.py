@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import unittest
 
+from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.exceptions import (
     COLLAPSED_TO_ERROR,
@@ -12,7 +13,6 @@ from codeweaver.backends.typescript.exceptions import (
 )
 from codeweaver.backends.typescript.module import generate_module
 from codeweaver.backends.typescript.statements import emit_statement
-from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.frontends.python import parse_source
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.statements import convert_statements

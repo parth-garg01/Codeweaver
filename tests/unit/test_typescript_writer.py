@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import unittest
 
+from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.typescript.naming import (
     escape_string,
     is_valid_identifier,
     safe_identifier,
     safe_property,
 )
-from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.diagnostics import SourceSpan
 
 

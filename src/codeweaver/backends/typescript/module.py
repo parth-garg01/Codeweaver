@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
+from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.exceptions import (
     is_builtin_exception,
@@ -24,7 +25,6 @@ from codeweaver.backends.typescript.expressions import emit_expression, emit_par
 from codeweaver.backends.typescript.naming import safe_identifier, safe_property
 from codeweaver.backends.typescript.statements import emit_block, emit_statement
 from codeweaver.backends.typescript.types import render_return_type, render_type
-from codeweaver.backends.typescript.writer import CodeWriter
 from codeweaver.diagnostics import DiagnosticBag
 from codeweaver.ir.declarations import (
     ACCESSOR_GETTER,
@@ -39,7 +39,15 @@ from codeweaver.ir.expressions import IRName
 from codeweaver.ir.statements import IRVarDecl
 from codeweaver.ir.types import TypeKind
 
-__all__ = ["GeneratedFile", "ModuleLayout", "generate_module", "output_path_for"]
+__all__ = [
+    "JAVASCRIPT",
+    "TYPESCRIPT",
+    "Dialect",
+    "GeneratedFile",
+    "ModuleLayout",
+    "generate_module",
+    "output_path_for",
+]
 
 #: Decorators the backend turns into a TypeScript modifier, so repeating them
 #: as a "not applied" comment would be misleading.
@@ -53,11 +61,35 @@ _HEADER = (
 )
 
 
-def output_path_for(source_path: str) -> str:
-    """The TypeScript path for a Python source path."""
+@dataclass(frozen=True, slots=True)
+class Dialect:
+    """One ECMAScript dialect: a file extension and whether it has types.
+
+    As far as code generation is concerned, TypeScript and JavaScript differ in
+    exactly these two respects — which is why they share an emitter rather than
+    keeping two copies of operator precedence, statement shapes, builtin
+    mapping and exception mapping that could drift apart.
+    """
+
+    name: str
+    extension: str
+    emit_types: bool
+
+
+#: The dialects this emitter produces.
+TYPESCRIPT = Dialect("typescript", ".ts", True)
+JAVASCRIPT = Dialect("javascript", ".js", False)
+
+
+def output_path_for(source_path: str, *, extension: str = ".ts") -> str:
+    """The output path for a Python source path.
+
+    ``__init__.py`` becomes ``index`` because that is the filename both Node and
+    bundlers resolve for a directory import.
+    """
     pure = PurePosixPath(source_path)
     stem = "index" if pure.stem == "__init__" else pure.stem
-    return str(pure.with_name(f"{stem}.ts"))
+    return str(pure.with_name(f"{stem}{extension}"))
 
 
 @dataclass
@@ -68,8 +100,13 @@ class ModuleLayout:
     paths: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def for_modules(cls, modules: list[IRModule]) -> ModuleLayout:
-        return cls({module.name: output_path_for(module.path) for module in modules})
+    def for_modules(
+        cls, modules: list[IRModule], *, dialect: Dialect | None = None
+    ) -> ModuleLayout:
+        extension = (dialect or TYPESCRIPT).extension
+        return cls(
+            {module.name: output_path_for(module.path, extension=extension) for module in modules}
+        )
 
     def specifier(self, from_module: str, to_module: str) -> str | None:
         """The import specifier that *from_module* should use for *to_module*."""
@@ -130,14 +167,19 @@ def generate_module(
     layout: ModuleLayout | None = None,
     *,
     diagnostics: DiagnosticBag | None = None,
+    dialect: Dialect | None = None,
 ) -> GeneratedFile:
-    """Generate the TypeScript file for *module*."""
-    layout = layout or ModuleLayout.for_modules([module])
-    output_path = layout.paths.get(module.name) or output_path_for(module.path)
+    """Generate the ECMAScript file for *module* in the requested dialect."""
+    dialect = dialect or TYPESCRIPT
+    layout = layout or ModuleLayout.for_modules([module], dialect=dialect)
+    output_path = layout.paths.get(module.name) or output_path_for(
+        module.path, extension=dialect.extension
+    )
     ctx = EmitContext(
         source_path=module.path,
         output_path=output_path,
         diagnostics=diagnostics if diagnostics is not None else DiagnosticBag(),
+        emit_types=dialect.emit_types,
     )
     writer = CodeWriter()
     ctx.namespace_imports = _namespace_bindings(module)
@@ -192,6 +234,33 @@ def _namespace_bindings(module: IRModule) -> dict[str, str]:
     return bindings
 
 
+def _return_annotation(ir_type, ctx: EmitContext, *, is_async: bool = False) -> str:
+    """``": T"`` for a typed dialect, ``""`` for an untyped one.
+
+    JavaScript has no type syntax, so the same IR has to render without it.
+    Keeping the decision here means a new annotation site cannot forget to ask.
+    """
+    if not ctx.emit_types:
+        return ""
+    rendered = render_return_type(ir_type)
+    if is_async and not rendered.startswith("Promise<"):
+        rendered = f"Promise<{rendered}>"
+    return f": {rendered}"
+
+
+def _visibility_modifiers(visibility: str, ctx: EmitContext) -> list[str]:
+    """Visibility keywords this dialect accepts.
+
+    ``private`` and ``protected`` are TypeScript-only.  JavaScript's ``#name``
+    private fields are not an equivalent: they rename the member and are
+    inaccessible to subclasses, so a faithful translation leaves the member
+    public and lets the report carry the difference.
+    """
+    if not ctx.emit_types or visibility == Visibility.PUBLIC:
+        return []
+    return ["private" if visibility == Visibility.PRIVATE else "protected"]
+
+
 def _emit_doc_comment(text: str, writer: CodeWriter) -> None:
     writer.line("/**")
     for line in text.strip().split("\n"):
@@ -240,7 +309,7 @@ def _emit_module_statement(statement, writer: CodeWriter, ctx: EmitContext) -> N
         name = safe_identifier(statement.name)
         annotation = (
             f": {render_type(statement.var_type)}"
-            if statement.var_type.kind is not TypeKind.UNKNOWN
+            if ctx.emit_types and statement.var_type.kind is not TypeKind.UNKNOWN
             else ""
         )
         prefix = "export " if statement.name and not statement.name.startswith("_") else ""
@@ -263,11 +332,9 @@ def _emit_function(
     prefix = "export " if exported and function.visibility == Visibility.PUBLIC else ""
     asynchronous = "async " if function.is_async else ""
     params = emit_params(function.params, ctx)
-    returns = render_return_type(function.return_type)
-    if function.is_async and not returns.startswith("Promise<"):
-        returns = f"Promise<{returns}>"
+    returns = _return_annotation(function.return_type, ctx, is_async=function.is_async)
     name = safe_identifier(function.name)
-    writer.line(f"{prefix}{asynchronous}function {name}({params}): {returns} {{", function.span)
+    writer.line(f"{prefix}{asynchronous}function {name}({params}){returns} {{", function.span)
     writer.indent()
     emit_block(function.body, writer, ctx)
     writer.dedent()
@@ -356,22 +423,18 @@ def _base_class_name(base, ctx: EmitContext) -> str:
 
 
 def _emit_field(item, writer: CodeWriter, ctx: EmitContext) -> None:
-    modifiers = []
-    if item.visibility == Visibility.PRIVATE:
-        modifiers.append("private")
-    elif item.visibility == Visibility.PROTECTED:
-        modifiers.append("protected")
+    modifiers = _visibility_modifiers(item.visibility, ctx)
     if item.is_static:
         modifiers.append("static")
     prefix = f"{' '.join(modifiers)} " if modifiers else ""
-    annotation = f": {render_type(item.field_type)}"
+    annotation = f": {render_type(item.field_type)}" if ctx.emit_types else ""
     # A field with no guaranteed initial value is optional, which is what makes
     # the class compile under strictPropertyInitialization.
-    name = (
-        f"{safe_property(item.name)}?"
-        if item.optional and item.default is None
-        else safe_property(item.name)
-    )
+    # The optional marker is what makes the class compile under
+    # strictPropertyInitialization.  JavaScript has no such marker, so an
+    # untyped dialect simply declares the field.
+    optional = item.optional and item.default is None and ctx.emit_types
+    name = f"{safe_property(item.name)}?" if optional else safe_property(item.name)
     if item.default is None:
         writer.line(f"{prefix}{name}{annotation};", item.span)
         return
@@ -386,24 +449,28 @@ def _emit_method(method: IRFunction, writer: CodeWriter, ctx: EmitContext) -> No
         if _decorator_is_applied(decorator, method):
             continue
         writer.line(f"// decorator not applied: {decorator.source_text or '<expression>'}")
-    modifiers: list[str] = []
-    if method.visibility == Visibility.PRIVATE:
-        modifiers.append("private")
-    elif method.visibility == Visibility.PROTECTED:
-        modifiers.append("protected")
+    modifiers: list[str] = _visibility_modifiers(method.visibility, ctx)
     if method.is_static:
         modifiers.append("static")
     if method.is_abstract:
-        modifiers.append("abstract")
+        if ctx.emit_types:
+            modifiers.append("abstract")
+        else:
+            ctx.warn(
+                "CW0644",
+                f"abstract member {method.name!r} has no equivalent in this dialect",
+                span=method.span,
+                hint="the member is emitted without its abstract marker",
+            )
     if method.is_async:
         modifiers.append("async")
     params = emit_params(method.params, ctx)
     if method.is_constructor:
         header = f"constructor({params})"
     elif method.accessor == ACCESSOR_GETTER:
-        returns = render_return_type(method.return_type)
         modifiers.append("get")
-        header = f"{safe_property(method.name)}(): {returns}"
+        returns = _return_annotation(method.return_type, ctx)
+        header = f"{safe_property(method.name)}(){returns}"
     elif method.accessor == ACCESSOR_SETTER:
         # A TypeScript setter takes exactly one parameter and must not declare
         # a return type, so neither is emitted from the IR verbatim.
@@ -411,10 +478,8 @@ def _emit_method(method: IRFunction, writer: CodeWriter, ctx: EmitContext) -> No
         parameter = _setter_parameter(method, ctx)
         header = f"{safe_property(method.name)}({parameter})"
     else:
-        returns = render_return_type(method.return_type)
-        if method.is_async and not returns.startswith("Promise<"):
-            returns = f"Promise<{returns}>"
-        header = f"{safe_property(method.name)}({params}): {returns}"
+        returns = _return_annotation(method.return_type, ctx, is_async=method.is_async)
+        header = f"{safe_property(method.name)}({params}){returns}"
     prefix = f"{' '.join(modifiers)} " if modifiers else ""
     if method.is_abstract:
         writer.line(f"{prefix}{header};", method.span)

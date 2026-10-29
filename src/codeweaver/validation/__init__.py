@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from codeweaver.validation.go import parse_go_output, run_build
+from codeweaver.validation.javascript import parse_node_output, run_syntax_check
 from codeweaver.validation.policy import ExecutionPolicy
 from codeweaver.validation.results import CheckOutcome, CheckResult, ValidationReport
 from codeweaver.validation.toolchain import (
@@ -29,13 +32,30 @@ __all__ = [
     "ValidationReport",
     "detect_toolchain",
     "detect_toolchains",
+    "parse_go_output",
+    "parse_node_output",
     "parse_tsc_output",
+    "run_build",
+    "run_syntax_check",
     "run_typecheck",
     "validate_project",
 ]
 
-#: Tools CodeWeaver looks for when validating TypeScript output.
+#: Tools CodeWeaver looks for when validating each target's output.
 TYPESCRIPT_TOOLS: tuple[str, ...] = ("tsc", "node", "npm")
+JAVASCRIPT_TOOLS: tuple[str, ...] = ("node", "npm")
+GO_TOOLS: tuple[str, ...] = ("go",)
+
+#: target -> (toolchains to look for, the check to run).
+#:
+#: A target absent from this table is reported as having no validation support,
+#: which is why a new backend cannot quietly produce unverified output that the
+#: report calls a pass.
+_VALIDATORS: dict[str, tuple[tuple[str, ...], Callable[..., CheckResult]]] = {
+    "typescript": (TYPESCRIPT_TOOLS, run_typecheck),
+    "javascript": (JAVASCRIPT_TOOLS, run_syntax_check),
+    "go": (GO_TOOLS, run_build),
+}
 
 
 def validate_project(
@@ -56,7 +76,7 @@ def validate_project(
     root = Path(output_dir)
     report = ValidationReport(output_dir=str(root))
 
-    if target != "typescript":
+    if target not in _VALIDATORS:
         report.add(
             CheckResult.skipped(
                 f"{target} validation", f"no validation support for target {target!r}"
@@ -64,10 +84,11 @@ def validate_project(
         )
         return report
 
-    toolchains = detect_toolchains(TYPESCRIPT_TOOLS, project_root=root)
+    tools, runner = _VALIDATORS[target]
+    toolchains = detect_toolchains(tools, project_root=root)
     report.tool_versions = toolchains.versions()
     source_map = SourceMapIndex.from_mappings(mappings or {})
-    report.add(run_typecheck(root, policy=policy, toolchains=toolchains, source_map=source_map))
+    report.add(runner(root, policy=policy, toolchains=toolchains, source_map=source_map))
 
     # Tests and installs are separate classes of execution; both are reported
     # as skipped rather than silently omitted so the report stays complete.

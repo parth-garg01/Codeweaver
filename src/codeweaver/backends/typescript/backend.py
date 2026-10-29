@@ -150,3 +150,9 @@ class TypeScriptBackend:
 
     def output_path(self, source_path: str) -> str:
         return output_path_for(source_path)
+
+    def layout_for(self, modules: list[IRModule]) -> ModuleLayout:
+        return ModuleLayout.for_modules(modules)
+
+    def project_files(self, project_name: str) -> dict[str, str]:
+        return project_files(project_name, strict=self.strict)

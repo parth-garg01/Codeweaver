@@ -99,7 +99,7 @@ class ToyBackend:
         project_name: str = "codeweaver-output",
         diagnostics: DiagnosticBag | None = None,
     ) -> dict[str, str]:
-        files = {"toy.manifest": f"name={project_name}\n"}
+        files = self.project_files(project_name)
         for module in modules:
             generated = self.generate_module(module, diagnostics=diagnostics)
             files[generated.path] = generated.contents
@@ -107,6 +107,12 @@ class ToyBackend:
 
     def output_path(self, source_path: str) -> str:
         return str(Path(source_path).with_suffix(self.file_extension))
+
+    def layout_for(self, modules: list[IRModule]) -> dict[str, str]:
+        return {module.name: self.output_path(module.path) for module in modules}
+
+    def project_files(self, project_name: str) -> dict[str, str]:
+        return {"toy.manifest": f"name={project_name}\n"}
 
 
 # -- the tests ------------------------------------------------------------
@@ -156,6 +162,18 @@ class SignatureAgreementTests(unittest.TestCase):
         protocol = inspect.signature(Frontend.parse_module)
         concrete = inspect.signature(PythonFrontend.parse_module)
         self.assertEqual(list(protocol.parameters), list(concrete.parameters))
+
+    def test_the_protocol_declares_everything_the_pipeline_calls(self) -> None:
+        # The pipeline drives a backend only through these members, so the
+        # protocol has to declare all of them (see issue #5).
+        for name in (
+            "generate_module",
+            "generate_project",
+            "output_path",
+            "layout_for",
+            "project_files",
+        ):
+            self.assertTrue(hasattr(Backend, name), name)
 
     def test_generate_module_accepts_a_layout_and_a_diagnostic_bag(self) -> None:
         # The exact call shape pipeline.py uses. This is the regression: the
