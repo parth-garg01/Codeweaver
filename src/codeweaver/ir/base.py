@@ -80,7 +80,9 @@ class IRNode:
         """Names of :meth:`payload_fields`, cached per class."""
         cached = _PAYLOAD_NAMES.get(cls)
         if cached is None:
-            cached = tuple(f.name for f in dataclasses.fields(cls) if f.name not in ("span", "meta"))
+            cached = tuple(
+                f.name for f in dataclasses.fields(cls) if f.name not in ("span", "meta")
+            )
             _PAYLOAD_NAMES[cls] = cached
         return cached
 

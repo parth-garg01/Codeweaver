@@ -123,6 +123,12 @@ EXCEPTION_REF = "exceptionRef"
 RANGE = "range"
 
 
+def _vt(node: object) -> IRType:
+    """The value type of *node*, or unknown for nodes that carry none."""
+    found = getattr(node, "value_type", None)
+    return found if isinstance(found, IRType) else t_unknown()
+
+
 def is_known(ir_type: IRType | None) -> bool:
     return ir_type is not None and ir_type.kind is not TypeKind.UNKNOWN
 
@@ -136,11 +142,17 @@ def _with_meta(ir_type: IRType, **meta: Any) -> IRType:
 
 
 def _is_numeric(ir_type: IRType | None) -> bool:
-    return bool(ir_type and ir_type.kind is TypeKind.PRIMITIVE and ir_type.name in ("int", "float", "bool"))
+    return bool(
+        ir_type and ir_type.kind is TypeKind.PRIMITIVE and ir_type.name in ("int", "float", "bool")
+    )
 
 
 def _is(ir_type: IRType | None, name: str) -> bool:
-    return bool(ir_type and ir_type.name == name and ir_type.kind in (TypeKind.PRIMITIVE, TypeKind.COLLECTION))
+    return bool(
+        ir_type
+        and ir_type.name == name
+        and ir_type.kind in (TypeKind.PRIMITIVE, TypeKind.COLLECTION)
+    )
 
 
 def element_type(container: IRType | None) -> IRType:
@@ -388,8 +400,8 @@ class _Inferrer:
         for item in klass.fields:
             default = self.expression(item.default, _Scope()) if item.default is not None else None
             declared = self.qualify(item.field_type)
-            if not is_known(declared) and default is not None and is_known(default.value_type):
-                declared = default.value_type
+            if not is_known(declared) and default is not None and is_known(_vt(default)):
+                declared = _vt(default)
             fields.append(replace(item, field_type=declared, default=default))
         methods = [self.function(method, info) for method in klass.methods]
         self.klass = previous
@@ -402,7 +414,7 @@ class _Inferrer:
             declared = self.qualify(param.param_type)
             default = self.expression(param.default, scope) if param.default is not None else None
             if not is_known(declared) and default is not None:
-                candidate = default.value_type
+                candidate = _vt(default)
                 if is_known(candidate) and candidate.kind is not TypeKind.NONE:
                     declared = candidate
             if param.style == "var_positional":
@@ -421,7 +433,9 @@ class _Inferrer:
         if info is not None and receiver:
             if function.meta.get("pythonClassMethod"):
                 self.class_receiver = receiver
-                scope.bind(receiver, _with_meta(self.index.instance_type(info), **{CLASS_REF: True}))
+                scope.bind(
+                    receiver, _with_meta(self.index.instance_type(info), **{CLASS_REF: True})
+                )
             else:
                 self.receiver = receiver
                 scope.bind(receiver, self.index.instance_type(info))
@@ -457,22 +471,18 @@ class _Inferrer:
             value = self.expression(node.value, scope) if node.value is not None else None
             declared = self.qualify(node.var_type)
             meta = node.meta
-            if not is_known(declared) and value is not None and is_known(value.value_type):
-                declared = value.value_type
+            if not is_known(declared) and value is not None and is_known(_vt(value)):
+                declared = _vt(value)
                 meta = {**meta, "inferredType": True}
-            elif (
-                is_known(declared)
-                and value is not None
-                and _better(declared, value.value_type)
-            ):
-                declared = value.value_type
+            elif is_known(declared) and value is not None and _better(declared, _vt(value)):
+                declared = _vt(value)
             scope.bind(node.name, declared)
             return replace(node, var_type=declared, value=value, meta=meta)
         if isinstance(node, IRAssign):
             value = self.expression(node.value, scope)
             target = self.expression(node.target, scope)
             if isinstance(target, IRName):
-                scope.bind(target.name, value.value_type)
+                scope.bind(target.name, _vt(value))
             return replace(node, target=target, value=value)
         if isinstance(node, IRAugAssign):
             return replace(
@@ -489,7 +499,7 @@ class _Inferrer:
                 return node
             value = self.expression(node.value, scope)
             if self.returns is not None:
-                self.returns.append(value.value_type)
+                self.returns.append(_vt(value))
             return replace(node, value=value)
         if isinstance(node, IRIf):
             return replace(
@@ -507,7 +517,7 @@ class _Inferrer:
             )
         if isinstance(node, IRForEach):
             iterable = self.expression(node.iterable, scope)
-            item = element_type(iterable.value_type)
+            item = element_type(_vt(iterable))
             target = node.target
             if isinstance(target, IRName):
                 scope.bind(target.name, item)
@@ -538,7 +548,7 @@ class _Inferrer:
                 if handler.name:
                     bound = t_unknown()
                     if len(types) == 1:
-                        bound = self._instance_of(types[0].value_type)
+                        bound = self._instance_of(_vt(types[0]))
                     scope.bind(handler.name, bound)
                 handlers.append(
                     replace(handler, exception_types=types, body=self.block(handler.body, scope))
@@ -572,9 +582,13 @@ class _Inferrer:
         """The instance type for a class-reference type."""
         if ir_type.meta.get(CLASS_REF):
             meta = {key: value for key, value in ir_type.meta.items() if key != CLASS_REF}
-            return IRType(ir_type.kind, ir_type.name, ir_type.args, ir_type.source_text, False, meta)
+            return IRType(
+                ir_type.kind, ir_type.name, ir_type.args, ir_type.source_text, False, meta
+            )
         if ir_type.meta.get(EXCEPTION_REF):
-            return IRType(TypeKind.OBJECT, ir_type.name, source_text=ir_type.name, meta={EXCEPTION_REF: True})
+            return IRType(
+                TypeKind.OBJECT, ir_type.name, source_text=ir_type.name, meta={EXCEPTION_REF: True}
+            )
         return t_unknown()
 
     # ------------------------------------------------------------- expressions
@@ -585,8 +599,7 @@ class _Inferrer:
         if isinstance(node, IRUnsupported):
             return node
         handler = getattr(self, f"_x_{type(node).__name__}", None)
-        rebuilt = handler(node, scope) if handler is not None else self._generic(node, scope)
-        return rebuilt
+        return handler(node, scope) if handler is not None else self._generic(node, scope)
 
     def _generic(self, node: IRExpression, scope: _Scope) -> IRExpression:
         changes: dict[str, Any] = {}
@@ -611,7 +624,7 @@ class _Inferrer:
 
     @staticmethod
     def _typed(node: IRExpression, ir_type: IRType | None) -> IRExpression:
-        if ir_type is not None and _better(node.value_type, ir_type):
+        if ir_type is not None and _better(_vt(node), ir_type):
             return replace(node, value_type=ir_type)
         return node
 
@@ -635,7 +648,9 @@ class _Inferrer:
             return _with_meta(self.index.instance_type(info), **{CLASS_REF: True})
         if entry.kind is ScopeKind.FUNCTION:
             function = self.index.functions[entry.qualified].node
-            params = tuple(self.index.qualify(param.param_type, entry.module) for param in function.params)
+            params = tuple(
+                self.index.qualify(param.param_type, entry.module) for param in function.params
+            )
             returns = self.index.qualify(function.return_type, entry.module)
             return t_callable(params, returns)
         if entry.kind is ScopeKind.VARIABLE:
@@ -650,7 +665,7 @@ class _Inferrer:
         return self._typed(rebuilt, self._attribute_type(target, node.name))
 
     def _attribute_type(self, target: IRExpression, name: str) -> IRType | None:
-        owner_type = target.value_type
+        owner_type = _vt(target)
         if _is_super_call(target) and self.klass is not None and self.klass.base:
             base = self.index.classes.get(self.klass.base)
             return self._member_type(base, name, instance=True) if base else None
@@ -687,7 +702,9 @@ class _Inferrer:
     def _x_IRCall(self, node: IRCall, scope: _Scope) -> IRExpression:
         callee = self.expression(node.callee, scope)
         args = [self.expression(item, scope) for item in node.args]
-        keywords = [replace(item, value=self.expression(item.value, scope)) for item in node.keywords]
+        keywords = [
+            replace(item, value=self.expression(item.value, scope)) for item in node.keywords
+        ]
         star_args = [self.expression(item, scope) for item in node.star_args]
         star_keywords = [self.expression(item, scope) for item in node.star_keywords]
         rebuilt = replace(
@@ -700,14 +717,16 @@ class _Inferrer:
         )
         return self._typed(rebuilt, self._call_type(callee, args, scope))
 
-    def _call_type(self, callee: IRExpression, args: list[IRExpression], scope: _Scope) -> IRType | None:
-        callee_type = callee.value_type
+    def _call_type(
+        self, callee: IRExpression, args: list[IRExpression], scope: _Scope
+    ) -> IRType | None:
+        callee_type = _vt(callee)
         if isinstance(callee, IRName) and scope.get(callee.name) is None:
             if self.index.lookup(self.module.name, callee.name) is None:
                 if callee.name == "super" and self.klass is not None and self.klass.base:
                     base = self.index.classes.get(self.klass.base)
                     return self.index.instance_type(base) if base else None
-                builtin = _builtin_result(callee.name, [item.value_type for item in args])
+                builtin = _builtin_result(callee.name, [_vt(item) for item in args])
                 if builtin is not None:
                     return builtin
         if callee_type.meta.get(CLASS_REF):
@@ -718,7 +737,7 @@ class _Inferrer:
             returns = callee_type.args[-1]
             return returns if is_known(returns) else None
         if isinstance(callee, IRAttribute):
-            receiver = callee.target.value_type
+            receiver = _vt(callee.target)
             return _method_result(receiver, callee.name)
         return None
 
@@ -726,14 +745,14 @@ class _Inferrer:
         left = self.expression(node.left, scope)
         right = self.expression(node.right, scope)
         rebuilt = replace(node, left=left, right=right)
-        return self._typed(rebuilt, _binary_type(node.op, left.value_type, right.value_type))
+        return self._typed(rebuilt, _binary_type(node.op, _vt(left), _vt(right)))
 
     def _x_IRUnary(self, node: IRUnary, scope: _Scope) -> IRExpression:
         operand = self.expression(node.operand, scope)
         rebuilt = replace(node, operand=operand)
         if node.op is UnaryOp.NOT:
             return self._typed(rebuilt, t_bool())
-        operand_type = operand.value_type
+        operand_type = _vt(operand)
         if node.op is UnaryOp.BIT_NOT:
             return self._typed(rebuilt, t_int() if _is_numeric(operand_type) else None)
         if _is_numeric(operand_type):
@@ -749,7 +768,7 @@ class _Inferrer:
     def _x_IRLogical(self, node: IRLogical, scope: _Scope) -> IRExpression:
         operands = [self.expression(item, scope) for item in node.operands]
         rebuilt = replace(node, operands=operands)
-        unified = _unify([item.value_type for item in operands])
+        unified = _unify([_vt(item) for item in operands])
         if is_known(unified) and not _is(unified, "bool"):
             # `a or b` returns an operand; keep the operand type when they agree.
             return replace(rebuilt, value_type=unified)
@@ -764,13 +783,13 @@ class _Inferrer:
             then_value=then_value,
             else_value=else_value,
         )
-        return self._typed(rebuilt, _unify([then_value.value_type, else_value.value_type]))
+        return self._typed(rebuilt, _unify([_vt(then_value), _vt(else_value)]))
 
     def _x_IRIndex(self, node: IRIndex, scope: _Scope) -> IRExpression:
         target = self.expression(node.target, scope)
         index = self.expression(node.index, scope)
         rebuilt = replace(node, target=target, index=index)
-        container = target.value_type
+        container = _vt(target)
         if container.kind is TypeKind.OPTIONAL and container.args:
             container = container.args[0]
         result: IRType | None = None
@@ -798,7 +817,7 @@ class _Inferrer:
             upper=self.expression(node.upper, scope) if node.upper is not None else None,
             step=self.expression(node.step, scope) if node.step is not None else None,
         )
-        container = target.value_type
+        container = _vt(target)
         if _is(container, "str") or _is(container, "list"):
             return self._typed(rebuilt, container)
         return rebuilt
@@ -807,20 +826,20 @@ class _Inferrer:
         elements = [self.expression(item, scope) for item in node.elements]
         rebuilt = replace(node, elements=elements)
         if elements:
-            return self._typed(rebuilt, t_list(_unify([item.value_type for item in elements])))
+            return self._typed(rebuilt, t_list(_unify([_vt(item) for item in elements])))
         return rebuilt
 
     def _x_IRSetLiteral(self, node: IRSetLiteral, scope: _Scope) -> IRExpression:
         elements = [self.expression(item, scope) for item in node.elements]
         rebuilt = replace(node, elements=elements)
         if elements:
-            return self._typed(rebuilt, t_set(_unify([item.value_type for item in elements])))
+            return self._typed(rebuilt, t_set(_unify([_vt(item) for item in elements])))
         return rebuilt
 
     def _x_IRTupleLiteral(self, node: IRTupleLiteral, scope: _Scope) -> IRExpression:
         elements = [self.expression(item, scope) for item in node.elements]
         rebuilt = replace(node, elements=elements)
-        types = [item.value_type for item in elements]
+        types = [_vt(item) for item in elements]
         if all(is_known(item) for item in types):
             return self._typed(rebuilt, t_tuple(*types))
         return rebuilt
@@ -836,8 +855,8 @@ class _Inferrer:
         ]
         rebuilt = replace(node, entries=entries)
         if entries:
-            key = _unify([entry.key.value_type for entry in entries])
-            value = _unify([entry.value.value_type for entry in entries])
+            key = _unify([_vt(entry.key) for entry in entries])
+            value = _unify([_vt(entry.value) for entry in entries])
             return self._typed(rebuilt, t_dict(key, value))
         return rebuilt
 
@@ -850,27 +869,25 @@ class _Inferrer:
             inner.bind(param.name, param.param_type)
         body = self.expression(node.body, inner) if node.body is not None else None
         rebuilt = replace(node, body=body)
-        returns = body.value_type if body is not None else t_unknown()
+        returns = _vt(body) if body is not None else t_unknown()
         params = tuple(param.param_type for param in node.params)
         return self._typed(rebuilt, t_callable(params, returns))
 
     def _x_IRComprehension(self, node: IRComprehension, scope: _Scope) -> IRExpression:
         iterable = self.expression(node.iterable, scope)
         inner = scope.child()
-        inner.bind(node.target, element_type(iterable.value_type))
+        inner.bind(node.target, element_type(_vt(iterable)))
         condition = self.expression(node.condition, inner) if node.condition is not None else None
         element = self.expression(node.element, inner)
         key = self.expression(node.key, inner) if node.key is not None else None
         rebuilt = replace(node, iterable=iterable, condition=condition, element=element, key=key)
         if node.form == "dict":
-            result = t_dict(key.value_type if key is not None else t_unknown(), element.value_type)
+            result = t_dict(_vt(key) if key is not None else t_unknown(), _vt(element))
         elif node.form == "set":
-            result = t_set(element.value_type)
+            result = t_set(_vt(element))
         else:
-            result = t_list(element.value_type)
-        rebuilt = replace(
-            rebuilt, meta={**rebuilt.meta, "itemType": element_type(iterable.value_type)}
-        )
+            result = t_list(_vt(element))
+        rebuilt = replace(rebuilt, meta={**rebuilt.meta, "itemType": element_type(_vt(iterable))})
         return self._typed(rebuilt, result)
 
 
@@ -888,7 +905,11 @@ def _binary_type(op: BinaryOp, left: IRType, right: IRType) -> IRType | None:
         if _is(left, "str") and _is(right, "str"):
             return t_str()
         if _is(left, "list") and _is(right, "list"):
-            return left if left == right or not is_known(element_type(right)) else _unify([left, right])
+            return (
+                left
+                if left == right or not is_known(element_type(right))
+                else _unify([left, right])
+            )
     if op is BinaryOp.MUL:
         if _is(left, "str") and _is(right, "int"):
             return t_str()
@@ -900,7 +921,13 @@ def _binary_type(op: BinaryOp, left: IRType, right: IRType) -> IRType | None:
         return None
     if op is BinaryOp.DIV:
         return t_float()
-    if op in (BinaryOp.BIT_AND, BinaryOp.BIT_OR, BinaryOp.BIT_XOR, BinaryOp.SHIFT_LEFT, BinaryOp.SHIFT_RIGHT):
+    if op in (
+        BinaryOp.BIT_AND,
+        BinaryOp.BIT_OR,
+        BinaryOp.BIT_XOR,
+        BinaryOp.SHIFT_LEFT,
+        BinaryOp.SHIFT_RIGHT,
+    ):
         if left.name == "bool" and right.name == "bool" and op is not BinaryOp.SHIFT_LEFT:
             return t_bool()
         return t_int()

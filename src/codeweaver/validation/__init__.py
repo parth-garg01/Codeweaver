@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from codeweaver.validation.compilers import PROFILES, CompilerProfile, run_compile_check
 from codeweaver.validation.policy import ExecutionPolicy
 from codeweaver.validation.results import CheckOutcome, CheckResult, ValidationReport
 from codeweaver.validation.toolchain import (
@@ -20,8 +21,10 @@ from codeweaver.validation.typescript import (
 )
 
 __all__ = [
+    "PROFILES",
     "CheckOutcome",
     "CheckResult",
+    "CompilerProfile",
     "ExecutionPolicy",
     "SourceMapIndex",
     "Toolchain",
@@ -30,6 +33,7 @@ __all__ = [
     "detect_toolchain",
     "detect_toolchains",
     "parse_tsc_output",
+    "run_compile_check",
     "run_typecheck",
     "validate_project",
 ]
@@ -56,18 +60,25 @@ def validate_project(
     root = Path(output_dir)
     report = ValidationReport(output_dir=str(root))
 
-    if target != "typescript":
+    source_map = SourceMapIndex.from_mappings(mappings or {})
+    if target == "typescript":
+        toolchains = detect_toolchains(TYPESCRIPT_TOOLS, project_root=root)
+        report.tool_versions = toolchains.versions()
+        report.add(run_typecheck(root, policy=policy, toolchains=toolchains, source_map=source_map))
+    elif target in PROFILES:
+        check = run_compile_check(root, PROFILES[target], policy=policy, source_map=source_map)
+        report.add(check)
+        if check.command and check.outcome is not CheckOutcome.SKIPPED:
+            tool = detect_toolchain(check.command[0])
+            if tool.available:
+                report.tool_versions = {PROFILES[target].candidates[0]: tool.version}
+    else:
         report.add(
             CheckResult.skipped(
                 f"{target} validation", f"no validation support for target {target!r}"
             )
         )
         return report
-
-    toolchains = detect_toolchains(TYPESCRIPT_TOOLS, project_root=root)
-    report.tool_versions = toolchains.versions()
-    source_map = SourceMapIndex.from_mappings(mappings or {})
-    report.add(run_typecheck(root, policy=policy, toolchains=toolchains, source_map=source_map))
 
     # Tests and installs are separate classes of execution; both are reported
     # as skipped rather than silently omitted so the report stays complete.

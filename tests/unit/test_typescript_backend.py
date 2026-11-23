@@ -132,7 +132,7 @@ class RegistrationTests(unittest.TestCase):
 
         matrix = register_all(LanguageRegistry()).support_matrix()
         self.assertEqual(matrix["sources"][0]["language"], "python")
-        self.assertEqual(matrix["targets"][0]["language"], "typescript")
+        self.assertIn("typescript", [target["language"] for target in matrix["targets"]])
 
 
 if __name__ == "__main__":

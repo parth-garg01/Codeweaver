@@ -312,8 +312,17 @@ class ProjectIndex:
         if ir_type.kind is TypeKind.OBJECT:
             info = self.class_for_type(ir_type, module)
             args = tuple(self.qualify(arg, module) for arg in ir_type.args)
-            base = ir_type if args == ir_type.args else IRType(
-                ir_type.kind, ir_type.name, args, ir_type.source_text, ir_type.nullable, ir_type.meta
+            base = (
+                ir_type
+                if args == ir_type.args
+                else IRType(
+                    ir_type.kind,
+                    ir_type.name,
+                    args,
+                    ir_type.source_text,
+                    ir_type.nullable,
+                    ir_type.meta,
+                )
             )
             return qualified_type(base, info.qualified) if info is not None else base
         if ir_type.args:
@@ -333,7 +342,9 @@ class ProjectIndex:
         return ir_type
 
     def instance_type(self, info: ClassInfo) -> IRType:
-        return qualified_type(IRType(TypeKind.OBJECT, info.name, source_text=info.name), info.qualified)
+        return qualified_type(
+            IRType(TypeKind.OBJECT, info.name, source_text=info.name), info.qualified
+        )
 
     def ancestors(self, info: ClassInfo) -> list[ClassInfo]:
         """*info* followed by its project base classes, nearest first."""

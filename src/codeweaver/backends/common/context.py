@@ -54,7 +54,12 @@ class EmitContext:
         return self.record_gap(IRUnsupported(kind, reason, hint=hint, span=span))
 
     def warn(self, code: str, message: str, span: SourceSpan | None = None, hint: str = "") -> None:
-        key = (code, span.file if span else "", span.start_line if span else 0, span.start_col if span else 0)
+        key = (
+            code,
+            span.file if span else "",
+            span.start_line if span else 0,
+            span.start_col if span else 0,
+        )
         if span is not None and key in self._reported:
             return
         self._reported.add(key)

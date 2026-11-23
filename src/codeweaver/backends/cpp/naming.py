@@ -1,0 +1,170 @@
+"""Identifier spelling for C++ output.
+
+Names are kept verbatim wherever C++ allows it, so the output can be reviewed
+against the source.  Two kinds of name must change:
+
+* C++ keywords and alternative operator spellings (``and``, ``not``, ``new``);
+* identifiers C++ reserves for the implementation: any name containing a double
+  underscore, and names starting with an underscore and a capital letter.
+  Python's private ``__balance`` and every dunder method fall in this group.
+
+Dunder methods with a runtime meaning are given the names the runtime looks
+for (``__str__`` becomes ``to_str``, which :func:`cw::str` calls).
+"""
+
+from __future__ import annotations
+
+import re
+
+__all__ = ["DUNDER_METHODS", "RESERVED_WORDS", "method_name", "safe_identifier"]
+
+RESERVED_WORDS: frozenset[str] = frozenset(
+    [
+        "alignas",
+        "alignof",
+        "and",
+        "and_eq",
+        "asm",
+        "auto",
+        "bitand",
+        "bitor",
+        "bool",
+        "break",
+        "case",
+        "catch",
+        "char",
+        "char8_t",
+        "char16_t",
+        "char32_t",
+        "class",
+        "compl",
+        "concept",
+        "const",
+        "consteval",
+        "constexpr",
+        "constinit",
+        "const_cast",
+        "continue",
+        "co_await",
+        "co_return",
+        "co_yield",
+        "decltype",
+        "default",
+        "delete",
+        "do",
+        "double",
+        "dynamic_cast",
+        "else",
+        "enum",
+        "explicit",
+        "export",
+        "extern",
+        "false",
+        "float",
+        "for",
+        "friend",
+        "goto",
+        "if",
+        "inline",
+        "int",
+        "long",
+        "mutable",
+        "namespace",
+        "new",
+        "noexcept",
+        "not",
+        "not_eq",
+        "nullptr",
+        "operator",
+        "or",
+        "or_eq",
+        "private",
+        "protected",
+        "public",
+        "register",
+        "reinterpret_cast",
+        "requires",
+        "return",
+        "short",
+        "signed",
+        "sizeof",
+        "static",
+        "static_assert",
+        "static_cast",
+        "struct",
+        "switch",
+        "template",
+        "this",
+        "thread_local",
+        "throw",
+        "true",
+        "try",
+        "typedef",
+        "typeid",
+        "typename",
+        "union",
+        "unsigned",
+        "using",
+        "virtual",
+        "void",
+        "volatile",
+        "wchar_t",
+        "while",
+        "xor",
+        "xor_eq",
+        "main",
+        "std",
+        "cw",
+        "NULL",
+        "errno",
+        "assert",
+    ]
+)
+
+#: Python dunder method -> the C++ member the runtime and backend use.
+DUNDER_METHODS: dict[str, str] = {
+    "__str__": "to_str",
+    "__repr__": "to_repr",
+    "__len__": "len_",
+    "__eq__": "eq_",
+    "__ne__": "ne_",
+    "__lt__": "lt_",
+    "__le__": "le_",
+    "__gt__": "gt_",
+    "__ge__": "ge_",
+    "__contains__": "contains_",
+    "__getitem__": "get_item_",
+    "__setitem__": "set_item_",
+    "__hash__": "hash_",
+    "__bool__": "bool_",
+    "__call__": "call_",
+}
+
+_INVALID = re.compile(r"[^A-Za-z0-9_]")
+
+
+def safe_identifier(name: str) -> str:
+    """Return *name* usable as a C++ identifier.  Deterministic."""
+    if not name:
+        return "_"
+    if name in DUNDER_METHODS:
+        return DUNDER_METHODS[name]
+    cleaned = _INVALID.sub("_", name)
+    if cleaned.startswith("__") and cleaned.endswith("__") and len(cleaned) > 4:
+        cleaned = f"py_{cleaned[2:-2]}"
+    elif cleaned.startswith("__"):
+        # Python's name-mangled private: `__balance` -> `balance_`.
+        cleaned = f"{cleaned.lstrip('_')}_"
+    if "__" in cleaned:
+        cleaned = re.sub(r"_{2,}", "_", cleaned)
+    if re.match(r"^_[A-Z]", cleaned):
+        cleaned = f"u{cleaned}"
+    if cleaned[0].isdigit():
+        cleaned = f"_{cleaned}"
+    if cleaned in RESERVED_WORDS:
+        cleaned = f"{cleaned}_"
+    return cleaned
+
+
+def method_name(name: str) -> str:
+    return safe_identifier(name)

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import Any
 
 from codeweaver.backends.common.files import GeneratedFile
 from codeweaver.backends.typescript.context import EmitContext

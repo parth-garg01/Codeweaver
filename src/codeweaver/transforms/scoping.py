@@ -66,9 +66,7 @@ def _child_blocks(statement: IRNode) -> list[IRBlock]:
 def _names_in(node: IRNode) -> set[str]:
     found: set[str] = set()
     for item in walk(node):
-        if isinstance(item, IRName):
-            found.add(item.name)
-        elif isinstance(item, IRVarDecl):
+        if isinstance(item, (IRName, IRVarDecl)):
             found.add(item.name)
         elif isinstance(item, IRForRange):
             found.add(item.variable)
@@ -140,7 +138,8 @@ def _rewrite_statement(statement: IRStatement, hoist: dict[int, IRVarDecl]) -> I
     if isinstance(statement, IRTry):
         body = _rewrite_block(statement.body, hoist)
         handlers = [
-            replace(handler, body=_rewrite_block(handler.body, hoist)) for handler in statement.handlers
+            replace(handler, body=_rewrite_block(handler.body, hoist))
+            for handler in statement.handlers
         ]
         else_body = _rewrite_block(statement.else_body, hoist) if statement.else_body else None
         final = _rewrite_block(statement.finally_body, hoist) if statement.finally_body else None
