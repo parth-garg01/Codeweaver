@@ -12,6 +12,7 @@ Two decisions here carry most of the weight:
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from typing import cast
 
 from codeweaver.frontends.python.annotations import annotation_to_type
@@ -166,6 +167,11 @@ def _ann_assign(node: ast.AnnAssign, ctx: ConversionContext) -> IRNode:
             "annotation-only declaration of a non-name target",
             hint="annotate a plain variable instead",
         )
+    if declared.is_known and isinstance(value, IRExpression):
+        # ``self.items: dict[str, int] = {}`` — the annotation is the only
+        # place the element types appear, so it must survive onto the value
+        # for field inference (and typed backends) to see it.
+        value = replace(value, value_type=declared)
     return IRAssign(convert_expression(node.target, ctx), value, span=ctx.span(node))
 
 
@@ -220,12 +226,104 @@ def _while(node: ast.While, ctx: ConversionContext) -> IRNode:
     )
 
 
+def _bind_target(target: ast.expr, value: ast.expr, ctx: ConversionContext) -> list[ast.stmt]:
+    """Python statements that bind *target* (possibly nested) from *value*."""
+    if not isinstance(target, ast.Tuple | ast.List):
+        return [ast.Assign(targets=[target], value=value)]
+    if isinstance(value, ast.Tuple) and len(value.elts) == len(target.elts):
+        pairs = list(zip(target.elts, value.elts, strict=True))
+        return [stmt for item, part in pairs for stmt in _bind_target(item, part, ctx)]
+    holder: ast.expr = value
+    statements: list[ast.stmt] = []
+    if not isinstance(value, ast.Name):
+        ctx.temp_counter += 1
+        name = f"cw_t{ctx.temp_counter}"
+        statements.append(ast.Assign(targets=[ast.Name(name, ast.Store())], value=value))
+        holder = ast.Name(name, ast.Load())
+    for position, item in enumerate(target.elts):
+        part = ast.Subscript(value=holder, slice=ast.Constant(position), ctx=ast.Load())
+        statements.extend(_bind_target(item, part, ctx))
+    return statements
+
+
+def _lower_for(node: ast.For, ctx: ConversionContext) -> list[ast.stmt] | None:
+    """Rewrite ``for`` loops with a tuple target or over ``enumerate()``.
+
+    ``for i, x in enumerate(xs, s)`` becomes a hidden counter and a loop over
+    ``xs``, so no backend needs an enumerate object; a tuple target becomes a
+    plain loop variable unpacked at the top of the body.  The counter is
+    bumped before the body runs, so ``continue`` cannot skip it.
+    """
+    iterable = node.iter
+    is_enumerate = (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and iterable.func.id == "enumerate"
+        and iterable.func.id not in ctx.bound_names
+        and 1 <= len(iterable.args) <= 2
+        and not iterable.keywords
+        and not any(isinstance(arg, ast.Starred) for arg in iterable.args)
+        and isinstance(node.target, ast.Tuple | ast.List)
+        and len(node.target.elts) == 2
+    )
+    if not is_enumerate and not isinstance(node.target, ast.Tuple | ast.List):
+        return None
+    if any(isinstance(inner, ast.Starred) for inner in ast.walk(node.target)):
+        return None
+    ctx.temp_counter += 1
+    item = f"cw_e{ctx.temp_counter}"
+    prelude: list[ast.stmt] = []
+    head: list[ast.stmt] = []
+    if is_enumerate:
+        call = cast(ast.Call, iterable)
+        counter = f"cw_n{ctx.temp_counter}"
+        start = call.args[1] if len(call.args) == 2 else ast.Constant(0)
+        prelude.append(ast.Assign(targets=[ast.Name(counter, ast.Store())], value=start))
+        index_target, element_target = cast(ast.Tuple, node.target).elts
+        head += _bind_target(index_target, ast.Name(counter, ast.Load()), ctx)
+        head.append(
+            ast.AugAssign(
+                target=ast.Name(counter, ast.Store()), op=ast.Add(), value=ast.Constant(1)
+            )
+        )
+        iterable = call.args[0]
+        if isinstance(element_target, ast.Name):
+            item = element_target.id
+        else:
+            head += _bind_target(element_target, ast.Name(item, ast.Load()), ctx)
+    else:
+        head += _bind_target(node.target, ast.Name(item, ast.Load()), ctx)
+    loop = ast.For(
+        target=ast.Name(item, ast.Store()),
+        iter=iterable,
+        body=[*head, *node.body],
+        orelse=node.orelse,
+        type_comment=None,
+    )
+    rewritten = [*prelude, loop]
+    for statement in rewritten:
+        ast.copy_location(statement, node)
+        for inner in ast.walk(statement):
+            if not hasattr(inner, "lineno") and isinstance(inner, ast.expr | ast.stmt):
+                ast.copy_location(inner, node)
+    return rewritten
+
+
 def _for(node: ast.For, ctx: ConversionContext) -> IRNode:
+    lowered = _lower_for(node, ctx)
+    if lowered is not None:
+        span = ctx.span(node)
+        statements = [cast(IRStatement, convert_statement(stmt, ctx)) for stmt in lowered]
+        if len(statements) == 1:
+            return statements[0]
+        block = IRBlock(statements, span=span)
+        block.meta[DESTRUCTURED] = True
+        return block
     if isinstance(node.target, ast.Tuple | ast.List):
         return ctx.unsupported(
             node,
-            "tuple unpacking in a for target has no IR mapping",
-            hint="iterate over the sequence and index the parts inside the loop",
+            "starred unpacking in a for target has no IR mapping",
+            hint="iterate over the sequence and slice the parts inside the loop",
         )
     if isinstance(node.target, ast.Name):
         ctx.bound_names.add(node.target.id)

@@ -328,11 +328,13 @@ class PythonFrontend:
         "arithmetic, bitwise, logical and comparison expressions",
         "calls, attribute access, indexing and slicing",
         "list, tuple, set and dict literals",
-        "f-strings without format specifications",
+        "f-strings, including literal format specifications and !r / !s",
         "if/elif/else, while, for-each, break, continue",
         "try/except/else/finally, raise, assert",
         "lambdas and conditional expressions",
         "single-clause list, set and dict comprehensions",
+        "generator arguments to sum, min, max, sorted, list, tuple, set, any, all and str.join",
+        "for loops over enumerate() and with (nested) tuple targets",
     )
     known_limitations = (
         "generator expressions are reported, not translated (they are lazy)",

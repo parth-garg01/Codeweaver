@@ -9,6 +9,7 @@ behaviour rather than a reported gap.
 from __future__ import annotations
 
 import ast
+from typing import cast
 
 from codeweaver.frontends.python.annotations import infer_literal_type
 from codeweaver.frontends.python.context import ConversionContext
@@ -186,14 +187,46 @@ def _compare(node: ast.Compare, ctx: ConversionContext) -> IRExpression | IRUnsu
     return IRLogical(LogicalOp.AND, parts, value_type=t_bool(), span=ctx.span(node))
 
 
+#: Builtins that always consume an iterable argument completely, so a
+#: generator passed to them has the same result as the equivalent list.
+_EXHAUSTING_BUILTINS = frozenset({"sum", "min", "max", "sorted", "list", "tuple", "set"})
+#: Builtins that stop early: eager evaluation is only equivalent when the
+#: generator cannot have side effects.
+_SHORT_CIRCUIT_BUILTINS = frozenset({"any", "all"})
+
+
+def _eager_generator(node: ast.Call, ctx: ConversionContext) -> ast.ListComp | None:
+    """``f(x for x in xs)`` as ``f([x for x in xs])`` where that is equivalent."""
+    if len(node.args) != 1 or not isinstance(node.args[0], ast.GeneratorExp):
+        return None
+    generator = node.args[0]
+    func = node.func
+    if isinstance(func, ast.Name) and func.id not in ctx.bound_names:
+        if func.id in _SHORT_CIRCUIT_BUILTINS:
+            if any(isinstance(inner, ast.Call) for inner in ast.walk(generator)):
+                return None
+        elif func.id not in _EXHAUSTING_BUILTINS:
+            return None
+    elif not (
+        isinstance(func, ast.Attribute)
+        and func.attr == "join"
+        and isinstance(func.value, ast.Constant)
+        and isinstance(func.value.value, str)
+    ):
+        return None
+    eager = ast.ListComp(elt=generator.elt, generators=generator.generators)
+    return ast.copy_location(eager, generator)
+
+
 def _call(node: ast.Call, ctx: ConversionContext) -> IRExpression:
     args: list[IRExpression] = []
     star_args: list[IRExpression] = []
+    eager = _eager_generator(node, ctx)
     for argument in node.args:
         if isinstance(argument, ast.Starred):
             star_args.append(convert_expression(argument.value, ctx))
         else:
-            args.append(convert_expression(argument, ctx))
+            args.append(convert_expression(eager or argument, ctx))
     keywords: list[IRKeyword] = []
     star_keywords: list[IRExpression] = []
     for keyword in node.keywords:
@@ -277,14 +310,46 @@ def _joined_str(node: ast.JoinedStr, ctx: ConversionContext) -> IRExpression:
     return IRTemplateString(parts, value_type=t_str(), span=ctx.span(node))
 
 
-def _formatted_value(node: ast.FormattedValue, ctx: ConversionContext) -> IRExpression:
-    if node.format_spec is not None or node.conversion not in (-1, None):
+def _formatted_value(
+    node: ast.FormattedValue, ctx: ConversionContext
+) -> IRExpression | IRUnsupported:
+    """``{value!conversion:spec}`` as the builtin calls Python itself makes.
+
+    ``!r`` and ``!s`` are ``repr()`` and ``str()``, and a literal format
+    specification is ``format(value, spec)``, so a backend only has to know
+    the builtins.  A specification with nested ``{...}`` fields is reported.
+    """
+    spec = node.format_spec
+    literal_spec = ""
+    if spec is not None:
+        parts = spec.values if isinstance(spec, ast.JoinedStr) else [spec]
+        if not all(
+            isinstance(part, ast.Constant) and isinstance(part.value, str) for part in parts
+        ):
+            return ctx.unsupported(
+                node,
+                "f-string format specification with nested fields has no IR mapping",
+                hint="build the specification as a literal",
+            )
+        literal_spec = "".join(str(cast(ast.Constant, part).value) for part in parts)
+    conversion = {-1: None, None: None, ord("r"): "repr", ord("s"): "str"}
+    if node.conversion not in conversion:
         return ctx.unsupported(
             node,
-            "f-string conversion or format specification has no IR mapping",
-            hint="format the value explicitly before interpolating it",
+            "f-string !a conversion has no IR mapping",
+            hint="call ascii() explicitly before interpolating",
         )
-    return convert_expression(node.value, ctx)
+    value = cast(IRExpression, convert_expression(node.value, ctx))
+    span = ctx.span(node)
+    wrapper = conversion[node.conversion]
+    if wrapper is not None:
+        value = IRCall(IRName(wrapper, span=span), args=[value], value_type=t_str(), span=span)
+    if literal_spec:
+        spec_literal = IRLiteral(literal_spec, value_type=t_str(), span=span)
+        value = IRCall(
+            IRName("format", span=span), args=[value, spec_literal], value_type=t_str(), span=span
+        )
+    return value
 
 
 def _lambda(node: ast.Lambda, ctx: ConversionContext) -> IRExpression:

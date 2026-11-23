@@ -241,6 +241,8 @@ def _builtin_result(name: str, args: list[IRType]) -> IRType | None:
         return _with_meta(t_list(t_int()), **{RANGE: True})
     if name == "print":
         return t_none()
+    if name == "zip":
+        return t_list(t_tuple(*(element_type(item) for item in args))) if args else t_list()
     if name == "divmod":
         return t_tuple(t_int(), t_int())
     if name == "pow":

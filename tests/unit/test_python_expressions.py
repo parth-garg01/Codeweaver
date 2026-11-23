@@ -204,14 +204,35 @@ class StringInterpolationTests(ExpressionConversionTestCase):
         node = self.convert("f'plain'")
         self.assertEqual(len(node.parts), 1)
 
-    def test_fstring_format_spec_is_reported(self) -> None:
-        node = self.convert("f'{value:.2f}'")
+    def test_fstring_format_spec_becomes_format_call(self) -> None:
+        node = self.convert("f'{value:>8.2f}'")
+        call = node.parts[0]
+        self.assertIsInstance(call, IRCall)
+        self.assertEqual(call.callee.name, "format")
+        self.assertEqual(call.args[1].value, ">8.2f")
+
+    def test_fstring_nested_format_spec_is_reported(self) -> None:
+        node = self.convert("f'{value:{width}}'")
         self.assertIsInstance(node.parts[0], IRUnsupported)
         self.assertIn("CW0400", self.warnings())
 
-    def test_fstring_conversion_is_reported(self) -> None:
-        node = self.convert("f'{value!r}'")
+    def test_fstring_conversion_becomes_repr_call(self) -> None:
+        node = self.convert("f'{value!r:>6}'")
+        call = node.parts[0]
+        self.assertEqual(call.callee.name, "format")
+        self.assertEqual(call.args[0].callee.name, "repr")
+
+    def test_fstring_ascii_conversion_is_reported(self) -> None:
+        node = self.convert("f'{value!a}'")
         self.assertIsInstance(node.parts[0], IRUnsupported)
+
+    def test_generator_passed_to_an_exhausting_builtin_is_eager(self) -> None:
+        node = self.convert("max(f(x) for x in xs)")
+        self.assertEqual(node.args[0].form, "list")
+
+    def test_generator_with_calls_passed_to_any_stays_lazy(self) -> None:
+        node = self.convert("any(f(x) for x in xs)")
+        self.assertIsInstance(node.args[0], IRUnsupported)
 
 
 class MiscExpressionTests(ExpressionConversionTestCase):

@@ -39,6 +39,8 @@ UNMAPPED_BUILTINS: dict[str, str] = {
     "globals": "module globals are not reified",
     "locals": "local scopes are not reified",
     "super": "super is handled only in a constructor or method call position",
+    "format": "Python format specifications are not modelled; use toFixed() or padStart()",
+    "repr": "Python's repr() is not modelled; use JSON.stringify() for strings",
 }
 
 

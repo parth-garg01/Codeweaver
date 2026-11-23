@@ -136,8 +136,22 @@ class ControlFlowTests(StatementTestCase):
         self.assertIsInstance(node, IRForEach)
         self.assertIn("item", self.ctx.bound_names)
 
-    def test_for_with_tuple_target_is_reported(self) -> None:
-        node = self.one("for k, v in pairs:\n    pass")
+    def test_for_with_tuple_target_unpacks_at_the_top_of_the_body(self) -> None:
+        node = self.one("for k, (a, b) in pairs:\n    pass")
+        self.assertIsInstance(node, IRForEach)
+        bound = [s.name for s in node.body.statements if isinstance(s, IRVarDecl)]
+        self.assertEqual([name for name in bound if not name.startswith("cw_")], ["k", "a", "b"])
+
+    def test_for_over_enumerate_uses_a_hidden_counter(self) -> None:
+        statements = self.block("for i, x in enumerate(xs, 1):\n    continue").statements
+        self.assertIsInstance(statements[0], IRVarDecl)
+        loop = statements[1]
+        self.assertIsInstance(loop, IRForEach)
+        self.assertEqual(loop.target.name, "x")
+        self.assertIsInstance(loop.body.statements[1], IRAugAssign)
+
+    def test_for_with_starred_target_is_reported(self) -> None:
+        node = self.one("for first, *rest in pairs:\n    pass")
         self.assertIsInstance(node, IRUnsupported)
 
     def test_async_for_is_reported(self) -> None:

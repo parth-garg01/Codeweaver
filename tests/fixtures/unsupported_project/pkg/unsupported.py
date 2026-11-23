@@ -17,8 +17,8 @@ def environment() -> str:
 
 
 def swap(pairs: list[list[int]]) -> None:
-    for left, right in pairs:
-        print(left, right)
+    for first, *rest in pairs:
+        print(first, rest)
 
 
 def pick(values: dict[str, int]) -> int:
