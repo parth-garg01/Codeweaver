@@ -43,6 +43,12 @@ CONSTRUCTS_CLASS = "constructsClass"
 #: kind -> node class.  Populated by the :func:`ir_node` decorator.
 _NODE_TYPES: dict[str, type[IRNode]] = {}
 
+#: node class -> its payload field names.  ``dataclasses.fields`` rebuilds its
+#: answer on every call, and traversal asks once per node visited, so caching
+#: per class is the single largest saving in a whole-project run.
+_PAYLOAD_NAMES: dict[type, tuple[str, ...]] = {}
+_PAYLOAD_FIELDS: dict[type, tuple[dataclasses.Field[Any], ...]] = {}
+
 T = TypeVar("T", bound="type[IRNode]")
 
 
@@ -62,17 +68,33 @@ class IRNode:
         to declare a data field called ``fields`` (as :class:`IRClass` does)
         without shadowing the traversal API.
         """
-        return [f for f in dataclasses.fields(self) if f.name not in ("span", "meta")]
+        cls = type(self)
+        cached = _PAYLOAD_FIELDS.get(cls)
+        if cached is None:
+            cached = tuple(f for f in dataclasses.fields(self) if f.name not in ("span", "meta"))
+            _PAYLOAD_FIELDS[cls] = cached
+        return list(cached)
+
+    @classmethod
+    def payload_names(cls) -> tuple[str, ...]:
+        """Names of :meth:`payload_fields`, cached per class."""
+        cached = _PAYLOAD_NAMES.get(cls)
+        if cached is None:
+            cached = tuple(f.name for f in dataclasses.fields(cls) if f.name not in ("span", "meta"))
+            _PAYLOAD_NAMES[cls] = cached
+        return cached
 
     def children(self) -> list[IRNode]:
         """Direct child nodes, in declaration order."""
         found: list[IRNode] = []
-        for info in self.payload_fields():
-            value = getattr(self, info.name)
+        for name in self.payload_names():
+            value = getattr(self, name)
             if isinstance(value, IRNode):
                 found.append(value)
             elif isinstance(value, list | tuple):
-                found.extend(item for item in value if isinstance(item, IRNode))
+                for item in value:
+                    if isinstance(item, IRNode):
+                        found.append(item)
         return found
 
     def to_dict(self) -> dict[str, Any]:
@@ -157,10 +179,22 @@ def node_from_dict(data: dict[str, Any]) -> IRNode:
 
 
 def walk(node: IRNode):
-    """Yield *node* and every descendant, depth first, parents before children."""
-    yield node
-    for child in node.children():
-        yield from walk(child)
+    """Yield *node* and every descendant, depth first, parents before children.
+
+    The traversal uses an explicit stack rather than recursive generators: a
+    nested ``yield from`` costs one generator frame per level for every node
+    yielded, which made deep trees quadratic in practice.
+    """
+    stack: list[IRNode] = [node]
+    pop = stack.pop
+    extend = stack.extend
+    while stack:
+        current = pop()
+        yield current
+        children = current.children()
+        if children:
+            children.reverse()
+            extend(children)
 
 
 @ir_node

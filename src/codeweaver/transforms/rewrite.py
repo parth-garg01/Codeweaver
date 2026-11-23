@@ -41,18 +41,18 @@ def rewrite_all(nodes: list[IRNode], rewriter: Rewriter) -> list[IRNode]:
 
 def _rebuild_children(node: IRNode, rewriter: Rewriter) -> IRNode:
     changes: dict[str, object] = {}
-    for info in node.payload_fields():
-        value = getattr(node, info.name)
+    for name in node.payload_names():
+        value = getattr(node, name)
         if isinstance(value, IRNode):
             rewritten = rewrite(value, rewriter)
             if rewritten is not value:
-                changes[info.name] = rewritten
+                changes[name] = rewritten
         elif isinstance(value, list) and any(isinstance(item, IRNode) for item in value):
             rewritten_list = [
                 rewrite(item, rewriter) if isinstance(item, IRNode) else item for item in value
             ]
             if any(new is not old for new, old in zip(rewritten_list, value, strict=True)):
-                changes[info.name] = rewritten_list
+                changes[name] = rewritten_list
     if not changes:
         return node
     return dataclasses.replace(node, **changes)
