@@ -51,7 +51,9 @@ def tool(name: str) -> str | None:
 
 
 def run(argv: list[str], cwd: Path, timeout: float = 300) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(
+        argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
+    )
 
 
 def python_output(project: Path, module: str) -> str:

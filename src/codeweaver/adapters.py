@@ -12,6 +12,7 @@ user-visible, so it should not be upgraded without the coverage to justify it.
 from __future__ import annotations
 
 from codeweaver.backends.cpp import CppBackend
+from codeweaver.backends.java import JavaBackend
 from codeweaver.backends.typescript import TypeScriptBackend
 from codeweaver.frontends.python import PythonFrontend
 from codeweaver.language_registry import LanguagePair, LanguageRegistry, SupportLevel, registry
@@ -45,6 +46,19 @@ def register_all(target: LanguageRegistry | None = None) -> LanguageRegistry:
             notes=(
                 "Implemented end to end for a documented construct subset, validated "
                 "with a C++20 compiler. Unannotated parameters become templates; "
+                "generators, context managers and async code are reported."
+            ),
+        )
+    )
+    into.register_backend(JavaBackend())
+    into.declare_pair(
+        LanguagePair(
+            source="python",
+            target="java",
+            level=SupportLevel.PARTIAL,
+            notes=(
+                "Implemented end to end for a documented construct subset, validated "
+                "with javac. Unannotated parameters are declared as Object; "
                 "generators, context managers and async code are reported."
             ),
         )

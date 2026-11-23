@@ -22,13 +22,42 @@ def _build_cpp(out: Path) -> list[str]:
     if compiler is None:
         raise unittest.SkipTest("no C++ compiler on PATH")
     sources = [str(path.relative_to(out)) for path in sorted((out / "src").rglob("*.cpp"))]
-    built = run([compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-Isrc", *sources, "-o", "app"], out)
+    built = run(
+        [
+            compiler,
+            "-std=c++20",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Isrc",
+            *sources,
+            "-o",
+            "app",
+        ],
+        out,
+    )
     if built.returncode != 0:
         raise AssertionError(built.stdout + built.stderr)
     return [str(out / "app")]
 
 
-BUILDERS = {"cpp": _build_cpp}
+def _build_java(out: Path) -> list[str]:
+    javac, java = tool("javac"), tool("java")
+    if javac is None or java is None:
+        raise unittest.SkipTest("no JDK on PATH")
+    sources = [
+        str(path.relative_to(out)) for path in sorted((out / "src/main/java").rglob("*.java"))
+    ]
+    built = run(
+        [javac, "-encoding", "UTF-8", "-Xlint:all", "-Werror", "-d", "classes", *sources], out
+    )
+    if built.returncode != 0:
+        raise AssertionError(built.stdout + built.stderr)
+    return [java, "-cp", str(out / "classes"), "app.Main"]
+
+
+BUILDERS = {"cpp": _build_cpp, "java": _build_java}
 
 
 class NativeEquivalenceTests(unittest.TestCase):
@@ -51,6 +80,9 @@ class NativeEquivalenceTests(unittest.TestCase):
 
     def test_cpp_matches_python(self) -> None:
         self.check("cpp")
+
+    def test_java_matches_python(self) -> None:
+        self.check("java")
 
 
 if __name__ == "__main__":

@@ -91,6 +91,15 @@ class CodeWriter:
         self.line(f"{header} {{", span)
         return _Block(self)
 
+    def extend(self, other: CodeWriter) -> None:
+        """Append *other*'s lines, shifting its mappings to their new lines."""
+        offset = len(self.lines)
+        self.lines.extend(other.lines)
+        self.mappings.extend(
+            MappingEntry(entry.output_line + offset, entry.source_file, entry.source_line)
+            for entry in other.mappings
+        )
+
     def render(self) -> str:
         """Return the accumulated source with exactly one trailing newline."""
         text = "\n".join(self.lines).rstrip("\n")

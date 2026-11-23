@@ -33,6 +33,7 @@ from codeweaver.backends.common.clike import (
     UNARY,
     Emitted,
 )
+from codeweaver.backends.common.context import UNSUPPORTED_MARKER
 from codeweaver.backends.common.strings import c_string_literal
 from codeweaver.backends.cpp.context import CppContext
 from codeweaver.backends.cpp.naming import safe_identifier
@@ -348,20 +349,30 @@ def _name(node: IRName, ctx: CppContext, expected: IRType | None) -> Emitted:
         return Emitted(ctx.entry_spelling(entry, name))
     if name in BUILTIN_EXCEPTIONS:
         return Emitted(f"cw::{name}")
-    return Emitted(safe_identifier(name))
+    marker = ctx.gap(
+        "Name",
+        f"{name!r} is not defined at module level (a nested function or a builtin used as a value)",
+        node.span,
+        "move the definition to module level",
+    )
+    return Emitted(f"{marker} cw::unsupported({c_string_literal(name)})", POSTFIX)
+
+
+def _is_gap(rendered: Emitted) -> bool:
+    return UNSUPPORTED_MARKER in rendered.text
 
 
 def _external_name(qualified: str, node: IRNode, ctx: CppContext) -> Emitted:
     module, _, member = qualified.rpartition(".")
     if module == "math" and member in _MATH_CONSTANTS:
         return Emitted(_MATH_CONSTANTS[member])
-    ctx.warn(
-        "CW0682",
+    marker = ctx.gap(
+        "Name",
         f"{qualified!r} comes from an external module that has no C++ mapping",
-        span=node.span,
-        hint="re-implement it, or link a C++ library that provides it",
+        node.span,
+        "re-implement it, or link a C++ library that provides it",
     )
-    return Emitted(safe_identifier(member or qualified))
+    return Emitted(f"{marker} cw::unsupported({c_string_literal(qualified)})", POSTFIX)
 
 
 # ----------------------------------------------------------------- operators
@@ -527,7 +538,10 @@ def _attribute(node: IRAttribute, ctx: CppContext, expected: IRType | None) -> E
     if target_type is not None and target_type.meta.get(CLASS_REF):
         return Emitted(f"{emit_expression(target, ctx).text}::{safe_identifier(name)}", POSTFIX)
     info = ctx.class_of(target_type)
-    rendered = emit_expression(target, ctx).at_least(POSTFIX)
+    target_rendered = emit_expression(target, ctx)
+    if _is_gap(target_rendered):
+        return target_rendered
+    rendered = target_rendered.at_least(POSTFIX)
     if info is not None:
         accessor = "." if info.is_exception else "->"
         member = f"{rendered}{accessor}{safe_identifier(name)}"
@@ -913,7 +927,10 @@ def _call(node: IRCall, ctx: CppContext, expected: IRType | None) -> Emitted:
         if method is not None:
             return method
 
-    callee_text = emit_expression(callee, ctx).at_least(POSTFIX)
+    callee_rendered = emit_expression(callee, ctx)
+    if _is_gap(callee_rendered):
+        return callee_rendered
+    callee_text = callee_rendered.at_least(POSTFIX)
     if node.meta.get(CONSTRUCTS_CLASS):
         info = ctx.class_of(_type(node))
         if info is not None:
@@ -1097,8 +1114,7 @@ def _external_call(qualified: str, node: IRCall, ctx: CppContext) -> Emitted:
         if template is not None and template.count("{") <= len(args):
             ctx.need("cmath")
             return Emitted(template.format(*args), POSTFIX)
-    callee = _external_name(qualified, node, ctx).text
-    return Emitted(f"{callee}({', '.join(args)})", POSTFIX)
+    return _external_name(qualified, node, ctx)
 
 
 # ------------------------------------------------------------------ builtins

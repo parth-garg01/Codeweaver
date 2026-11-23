@@ -56,12 +56,14 @@ class ClassTests(unittest.TestCase):
         self.assertIn("class Child final : public Base", cpp(self.SOURCE))
 
     def test_super_init_becomes_the_initialiser_list(self) -> None:
-        self.assertIn("Child::Child(const std::string& name, std::int64_t age) : Base(name)", cpp(self.SOURCE))
+        self.assertIn(
+            "Child::Child(const std::string& name, std::int64_t age) : Base(name)", cpp(self.SOURCE)
+        )
 
     def test_instances_are_shared_pointers(self) -> None:
         out = cpp(self.SOURCE + "def make() -> Base:\n    return Child('a', 1)\n")
         self.assertIn("std::shared_ptr<Base> make()", out)
-        self.assertIn("std::make_shared<Child>(\"a\"s, 1)", out)
+        self.assertIn('std::make_shared<Child>("a"s, 1)', out)
 
 
 class CallTests(unittest.TestCase):
@@ -132,7 +134,9 @@ class ControlFlowTests(unittest.TestCase):
 
 class HonestyTests(unittest.TestCase):
     def test_unsupported_constructs_are_marked_in_the_output(self) -> None:
-        files, bag = translate({"m.py": "def f() -> None:\n    with open('x') as h:\n        pass\n"}, "cpp")
+        files, bag = translate(
+            {"m.py": "def f() -> None:\n    with open('x') as h:\n        pass\n"}, "cpp"
+        )
         self.assertIn("CODEWEAVER-UNSUPPORTED", files["src/m.cpp"])
 
     def test_project_files_include_runtime_and_cmake(self) -> None:
