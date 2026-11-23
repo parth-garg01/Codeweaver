@@ -44,10 +44,17 @@ adapters themselves rather than from this document.
 - Chained comparisons, conditional expressions, lambdas
 - Calls, attribute access, indexing, slicing without a step
 - `list`, `tuple`, `set` and `dict` literals; f-strings without format specs
+  (a format specification is lowered to `format()`, which is reported)
 - Single-clause list, set and dict comprehensions, generated as
   `.filter(...).map(...)` chains
 - Destructuring assignment of names (`a, b = b, a`), lowered by the frontend
   to element-wise assignments with temporaries where the order matters
+- `for` loops with tuple targets, nested ones included
+  (`for i, (k, v) in ...`), and over `enumerate(xs, start)`, lowered by the
+  frontend to a plain loop and a hidden counter
+- A generator passed to `sum`, `min`, `max`, `sorted`, `list`, `tuple`, `set`
+  or `str.join`, which consume it completely, is evaluated as a list; so is
+  one passed to `any`/`all` when it makes no calls (they stop early)
 - Builtins with a faithful counterpart: `len`, `print`, `str`, `int`, `float`,
   `bool`, `abs`, `round`, `list`, `tuple`, `set`, `sum`, `sorted`,
   `isinstance`, `min`, `max`
@@ -64,11 +71,11 @@ the generated file:
 
 | Construct | Reason |
 | --------- | ------ |
-| Multi-clause comprehensions, generator expressions | Not lowered by this build |
+| Multi-clause comprehensions; other generator expressions | Not lowered by this build |
 | `with` / `async with` | No direct equivalent; needs explicit try/finally |
 | `match` | No structural pattern matching in the target |
 | Nested `def` / `class` | Not lifted to module scope |
-| Starred or nested destructuring, tuple `for` targets | Needs explicit element access |
+| Starred or nested destructuring, starred `for` targets | Needs explicit element access |
 | `global` / `nonlocal` | No equivalent scoping |
 | `yield` / `yield from` | Generators are not modelled |
 | Walrus `:=` | No equivalent in an expression position |
@@ -77,7 +84,8 @@ the generated file:
 | `a @ b` | No matrix-multiply operator |
 | Stepped slices `xs[::2]` | No equivalent slice form |
 | `del x` on a binding | No equivalent |
-| `enumerate`, `zip`, `map`, `filter`, `reversed`, `iter`, `next` | Depend on Python's iterator protocol |
+| `enumerate` outside a `for` loop, `zip`, `map`, `filter`, `reversed`, `iter`, `next` | Depend on Python's iterator protocol |
+| `format()`, `repr()`, f-string format specifications | Python's format mini-language is not modelled |
 | `getattr` / `setattr` / `hasattr` | Dynamic attribute access is not modelled |
 | `eval` / `exec` | Dynamic evaluation is deliberately never generated |
 
@@ -133,6 +141,20 @@ against CPython.
 - f-strings, `str()`, `repr()` and `print()` with Python's formatting,
   including the shortest round-tripping float repr (`0.1 + 0.2` prints
   `0.30000000000000004`, `1e20` prints `1e+20`)
+- f-string format specifications and `format(value, spec)`: fill, alignment,
+  sign, `#`, zero padding, width, `,`/`_` grouping, precision and the types
+  `d x X o b e E f F g G % s`, rounded from the exact binary value as
+  CPython does (`f"{2.675:.2f}"` is `2.67`)
+- `round(x, n)` rounded from the exact binary value, halves to even
+- `for` loops over `enumerate()` and with nested tuple targets; generator
+  arguments to `sum`, `min`, `max`, `sorted` and friends
+- `print()` evaluates its arguments left to right, as Python does (C and C++
+  leave call-argument order unspecified, so the backends sequence it)
+- int `+`, `-`, `*` and `**` are overflow checked: a result outside 64 bits
+  raises `OverflowError` instead of wrapping (see below)
+- Floating point keeps Python's results bit for bit: the generated C and C++
+  turn off multiply-add contraction (`-ffp-contract=off` and a pragma), which
+  clang otherwise applies
 - List comprehensions; `len`, `print`, `str`, `int`, `float`, `bool`, `abs`,
   `round` (halves to even), `min`, `max`, `sum`, `sorted`, `list`, `range`
 - Common `str` and `list` methods; `math` functions and constants
@@ -145,8 +167,9 @@ against CPython.
 - `try`/`except`/`else`/`finally` with exact `else` and `finally` ordering;
   exception classes and hierarchies (Java maps builtins onto its own, e.g.
   `ValueError` → `IllegalArgumentException`)
-- `isinstance`, `any`, `all`; lambdas (Java captures copies of reassigned
-  locals explicitly)
+- `isinstance`, `any`, `all`, `zip`; lambdas (Java captures copies of
+  reassigned locals explicitly, and renames a comprehension variable that
+  would shadow a local)
 - C++: unannotated parameters become template parameters
 
 ### Reported, not translated (native)
@@ -168,7 +191,15 @@ In C, a function that contains a gap is replaced by a stub that stops with
 ### Behaviour differences the report flags
 
 - **int** is a 64-bit signed integer in all three; Python's arbitrary
-  precision is not modelled, so overflow wraps instead of growing.
+  precision is not modelled. `+`, `-`, `*` and `**` raise `OverflowError`
+  when the result does not fit (`fact(25)` stops the program rather than
+  printing a wrapped number). In C and C++, `-DCODEWEAVER_UNCHECKED=ON`
+  removes the checks (and, in C++, index bounds checks) for maximum speed.
+- **str** is UTF-8 bytes in C and C++: `len()`, indexing and slicing count
+  bytes, so they match Python exactly for ASCII text. Each non-ASCII string
+  literal gets a `CW0682` warning. Java counts UTF-16 units, which matches
+  Python for every character outside the astral planes. Format widths and
+  precisions count characters on all three.
 - **C++ containers have value semantics**: assigning a list to a second name
   copies it. Java and C share references, as Python does.
 - **C never frees memory**; define `CW_ALLOC` (for example as Boehm GC's

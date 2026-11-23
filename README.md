@@ -25,8 +25,10 @@ The native targets are built for speed as well as fidelity: int is a 64-bit
 integer, float a double, indexing inside `for i in range(len(xs))` skips the
 bounds check it provably cannot fail, and only methods that are actually
 overridden dispatch dynamically. On the CPU-bound workload in
-[`benchmarks/`](benchmarks/README.md) the generated C runs about 30x faster
-than CPython, C++ about 14x and Java about 5x, with byte-identical output.
+[`benchmarks/`](benchmarks/README.md) the generated C runs about 24x faster
+than CPython (about 32x with int overflow checks turned off), C++ about 14x
+and Java about 5x, with byte-identical output. A 64-bit int result that
+Python would grow past raises `OverflowError` rather than wrapping.
 
 `partial` is not a softer word for `supported`. A deliberately scoped set of
 constructs is translated; everything else produces a diagnostic, a

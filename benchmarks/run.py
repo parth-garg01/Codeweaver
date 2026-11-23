@@ -139,14 +139,39 @@ def _build(target: str, out: Path) -> list[str] | None:
         if compiler is None:
             return None
         sources = [str(path.relative_to(out)) for path in sorted((out / "src").rglob("*.c"))]
-        run([compiler, "-std=c11", "-O3", "-DNDEBUG", "-Isrc", *sources, "-o", "app", "-lm"])
+        run(
+            [
+                compiler,
+                "-std=c11",
+                "-O3",
+                "-ffp-contract=off",
+                "-DNDEBUG",
+                "-Isrc",
+                *sources,
+                "-o",
+                "app",
+                "-lm",
+            ]
+        )
         return [str(out / "app")]
     if target == "cpp":
         compiler = _tool("c++", "clang++", "g++")
         if compiler is None:
             return None
         sources = [str(path.relative_to(out)) for path in sorted((out / "src").rglob("*.cpp"))]
-        run([compiler, "-std=c++20", "-O3", "-DNDEBUG", "-Isrc", *sources, "-o", "app"])
+        run(
+            [
+                compiler,
+                "-std=c++20",
+                "-O3",
+                "-ffp-contract=off",
+                "-DNDEBUG",
+                "-Isrc",
+                *sources,
+                "-o",
+                "app",
+            ]
+        )
         return [str(out / "app")]
     if target == "java":
         javac, java = _tool("javac"), _tool("java")

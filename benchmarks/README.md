@@ -28,24 +28,38 @@ Apple M5 (arm64), CPython 3.12, Apple clang 21, OpenJDK 21. Your numbers
 will differ. Rerun the benchmark rather than quoting these.
 
 ```text
-Conversion: 300 modules, best of 3, validation off
+Conversion: 300 modules, best of 5, validation off
   target       seconds  modules/s  lines out
-  typescript     0.351        856      11715
-  c              0.583        515      22219
-  cpp            0.539        556      21319
-  java           0.572        524      15611
+  typescript     0.354        847      11715
+  c              0.607        494      22224
+  cpp            0.551        545      21595
+  java           0.585        513      15611
   (8682 lines of Python in)
 
-Runtime: benchmarks/workload, best of 3
+Runtime: benchmarks/workload, best of 5
   target       seconds  speed-up  output
-  python         1.159      1.0x  reference (3.12.16)
-  c              0.037     31.4x  identical
-  cpp            0.081     14.3x  identical
-  java           0.219      5.3x  identical
+  python         1.175      1.0x  reference (3.12.16)
+  c              0.050     23.7x  identical
+  cpp            0.082     14.3x  identical
+  java           0.234      5.0x  identical
 ```
 
 Java's figure includes JVM start-up, which is most of its time at this size.
 C++ objects are reference counted (`shared_ptr`), which keeps Python's
 aliasing but costs a little on every object access, and indexing outside
-provably safe loops is bounds checked; the CMake option
-`-DCODEWEAVER_UNCHECKED=ON` removes those checks.
+provably safe loops is bounds checked.
+
+int `+`, `-`, `*` and `**` are overflow checked on every native target, so a
+result Python would grow past 64 bits raises `OverflowError` instead of
+printing a wrapped number. The check is one flag test per operation. It costs
+C about a third on this workload, because the checked `i * size + j` index
+arithmetic keeps clang from vectorising the matrix multiply (0.036 s
+unchecked, 0.050 s checked). C++ and Java show no measurable cost. The CMake
+option `-DCODEWEAVER_UNCHECKED=ON` (or `-DCW_UNCHECKED` by hand) removes the
+overflow checks in C and C++, and the index bounds checks in C++, for maximum
+speed once a program is known to stay in range.
+
+Builds use `-ffp-contract=off`, and the runtime headers set
+`#pragma STDC FP_CONTRACT OFF`. Without that, clang fuses `x += v * dt` into
+one FMA instruction and the last digits of float results stop matching
+CPython. The pragma costs nothing measurable here.
