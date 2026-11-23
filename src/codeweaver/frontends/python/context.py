@@ -26,6 +26,8 @@ class ConversionContext:
     #: Names bound in the module or function scope being converted, used to
     #: tell a new binding apart from a re-assignment.
     bound_names: set[str] = field(default_factory=set)
+    #: Counter for compiler-introduced temporaries (destructuring).
+    temp_counter: int = 0
 
     def span(self, node: ast.AST) -> SourceSpan:
         return SourceSpan(

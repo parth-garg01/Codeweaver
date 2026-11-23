@@ -17,7 +17,7 @@ from codeweaver.frontends.python.annotations import annotation_to_type
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.expressions import BINARY_OPS, convert_expression
 from codeweaver.ir.base import IRNode
-from codeweaver.ir.expressions import IRName
+from codeweaver.ir.expressions import IRIndex, IRLiteral, IRName
 from codeweaver.ir.statements import (
     IRAssert,
     IRAssign,
@@ -39,7 +39,11 @@ from codeweaver.ir.statements import (
 )
 from codeweaver.ir.types import t_unknown
 
-__all__ = ["convert_block", "convert_statement", "convert_statements"]
+__all__ = ["DESTRUCTURED", "convert_block", "convert_statement", "convert_statements"]
+
+#: Meta flag on the IRBlock a destructuring assignment lowers to; the block is
+#: spliced into the enclosing statement list.
+DESTRUCTURED = "pythonDestructured"
 
 
 def convert_block(body: list[ast.stmt], ctx: ConversionContext) -> IRBlock:
@@ -50,7 +54,11 @@ def convert_block(body: list[ast.stmt], ctx: ConversionContext) -> IRBlock:
 def convert_statements(body: list[ast.stmt], ctx: ConversionContext) -> list[IRNode]:
     converted: list[IRNode] = []
     for statement in body:
-        converted.append(convert_statement(statement, ctx))
+        result = convert_statement(statement, ctx)
+        if isinstance(result, IRBlock) and result.meta.get(DESTRUCTURED):
+            converted.extend(result.statements)
+        else:
+            converted.append(result)
     return converted
 
 
@@ -73,17 +81,73 @@ def _assign(node: ast.Assign, ctx: ConversionContext) -> IRNode:
             hint="assign to one target per statement",
         )
     target = node.targets[0]
-    value = convert_expression(node.value, ctx)
     if isinstance(target, ast.Tuple | ast.List):
-        return ctx.unsupported(
-            node,
-            "destructuring assignment has no IR mapping",
-            hint="assign each element on its own line",
-        )
+        return _destructure(node, target, ctx)
+    value = convert_expression(node.value, ctx)
     if isinstance(target, ast.Name):
         return _bind_name(target.id, t_unknown(), value, node, ctx)
     converted_target = convert_expression(target, ctx)
     return IRAssign(converted_target, value, span=ctx.span(node))
+
+
+def _names_in(node: ast.AST) -> set[str]:
+    return {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
+
+
+def _destructure(node: ast.Assign, target: ast.Tuple | ast.List, ctx: ConversionContext) -> IRNode:
+    """Lower ``a, b = x, y`` to element-wise bindings.
+
+    Python evaluates the whole right-hand side before binding any target, so
+    ``a, b = b, a`` swaps.  Each element goes into a temporary first unless no
+    target is read on the right-hand side, in which case the bindings are
+    direct.  A non-literal right-hand side (``q, r = divmod(a, b)``) is bound
+    to one temporary and indexed by constant position.
+    """
+    targets = target.elts
+    if any(isinstance(item, ast.Starred | ast.Tuple | ast.List) for item in targets):
+        return ctx.unsupported(
+            node,
+            "starred or nested destructuring has no IR mapping",
+            hint="assign each element on its own line",
+        )
+    span = ctx.span(node)
+    statements: list[IRNode] = []
+
+    def temp(value) -> IRName:
+        ctx.temp_counter += 1
+        name = f"cw_t{ctx.temp_counter}"
+        statements.append(IRVarDecl(name, t_unknown(), value, span=span))
+        return IRName(name, span=span)
+
+    def bind(item: ast.expr, value) -> None:
+        if isinstance(item, ast.Name):
+            statements.append(_bind_name(item.id, t_unknown(), value, node, ctx))
+        else:
+            statements.append(IRAssign(convert_expression(item, ctx), value, span=ctx.span(item)))
+
+    source = node.value
+    if isinstance(source, ast.Tuple | ast.List) and not any(
+        isinstance(e, ast.Starred) for e in source.elts
+    ):
+        if len(source.elts) != len(targets):
+            return ctx.unsupported(node, "destructuring with mismatched element counts")
+        written = set().union(*(_names_in(item) for item in targets))
+        read = set().union(*(_names_in(item) for item in source.elts))
+        values = [convert_expression(item, ctx) for item in source.elts]
+        if written & read:
+            values = [temp(value) for value in values]
+        for item, value in zip(targets, values, strict=True):
+            bind(item, value)
+    else:
+        holder = temp(convert_expression(source, ctx))
+        for position, item in enumerate(targets):
+            index = IRIndex(
+                IRName(holder.name, span=span), IRLiteral(position, span=span), span=span
+            )
+            bind(item, index)
+    block = IRBlock(statements, span=span)
+    block.meta[DESTRUCTURED] = True
+    return block
 
 
 def _ann_assign(node: ast.AnnAssign, ctx: ConversionContext) -> IRNode:

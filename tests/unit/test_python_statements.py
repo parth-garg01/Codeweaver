@@ -76,8 +76,27 @@ class BindingTests(StatementTestCase):
     def test_index_assignment_is_an_assignment(self) -> None:
         self.assertIsInstance(self.one("xs[0] = 1"), IRAssign)
 
-    def test_destructuring_is_reported(self) -> None:
-        node = self.one("a, b = 1, 2")
+    def test_destructuring_binds_each_element_directly(self) -> None:
+        block = self.block("a, b = 1, 2")
+        self.assertEqual([type(item) for item in block.statements], [IRVarDecl, IRVarDecl])
+        self.assertEqual([item.name for item in block.statements], ["a", "b"])
+
+    def test_destructuring_swap_goes_through_temporaries(self) -> None:
+        block = self.block("a = 1\nb = 2\na, b = b, a")
+        swap = block.statements[2:]
+        self.assertEqual(len(swap), 4)
+        self.assertTrue(all(isinstance(item, IRVarDecl) for item in swap[:2]))
+        self.assertTrue(all(isinstance(item, IRAssign) for item in swap[2:]))
+        self.assertEqual(swap[2].value.name, swap[0].name)
+
+    def test_destructuring_a_call_indexes_one_temporary(self) -> None:
+        block = self.block("q, r = divmod(7, 2)")
+        self.assertEqual(len(block.statements), 3)
+        self.assertEqual(block.statements[1].value.kind, "index")
+        self.assertEqual(block.statements[2].value.index.value, 1)
+
+    def test_starred_destructuring_is_reported(self) -> None:
+        node = self.one("a, *rest = values")
         self.assertIsInstance(node, IRUnsupported)
         self.assertIn("own line", node.hint)
 

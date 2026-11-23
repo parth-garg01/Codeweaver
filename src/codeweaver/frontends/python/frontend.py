@@ -15,7 +15,7 @@ from codeweaver.diagnostics import DiagnosticBag, SourceSpan
 from codeweaver.frontends.python.annotations import annotation_to_type
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.expressions import convert_expression, convert_params
-from codeweaver.frontends.python.statements import convert_block, convert_statement
+from codeweaver.frontends.python.statements import DESTRUCTURED, convert_block, convert_statement
 from codeweaver.ir.declarations import (
     IRClass,
     IRDecorator,
@@ -26,7 +26,7 @@ from codeweaver.ir.declarations import (
     IRModule,
     Visibility,
 )
-from codeweaver.ir.statements import IRVarDecl
+from codeweaver.ir.statements import IRBlock, IRVarDecl
 from codeweaver.ir.types import t_unknown
 
 __all__ = [
@@ -117,9 +117,15 @@ def _convert_module(tree: ast.Module, path: str, ctx: ConversionContext) -> IRMo
             ctx.bound_names.add(statement.name)
         else:
             converted = convert_statement(statement, ctx)
-            if isinstance(converted, IRVarDecl):
-                converted.is_const = converted.name.isupper()
-            module.body.append(converted)
+            parts = (
+                converted.statements
+                if isinstance(converted, IRBlock) and converted.meta.get(DESTRUCTURED)
+                else [converted]
+            )
+            for part in parts:
+                if isinstance(part, IRVarDecl):
+                    part.is_const = part.name.isupper()
+                module.body.append(part)
     return module
 
 
