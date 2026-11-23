@@ -23,6 +23,7 @@ from codeweaver.backends.cpp.expressions import (
     condition,
     emit_expression,
     emit_store_target,
+    is_int_arithmetic,
 )
 from codeweaver.backends.cpp.naming import safe_identifier
 from codeweaver.backends.cpp.types import render_type
@@ -155,6 +156,14 @@ def _assign(node: IRAssign, writer: CodeWriter, ctx: CppContext) -> None:
     writer.line(f"{rendered_target} = {value};", node.span)
 
 
+#: Overflow-checked in-place int operators (see cw::checked_add).
+_CHECKED_AUG: dict[BinaryOp, str] = {
+    BinaryOp.ADD: "cw::iadd",
+    BinaryOp.SUB: "cw::isub",
+    BinaryOp.MUL: "cw::imul",
+}
+
+
 def _aug_assign(node: IRAugAssign, writer: CodeWriter, ctx: CppContext) -> None:
     target = (
         emit_store_target(node.target, ctx)
@@ -179,6 +188,14 @@ def _aug_assign(node: IRAugAssign, writer: CodeWriter, ctx: CppContext) -> None:
         if target_type.kind is TypeKind.COLLECTION and target_type.name == "list":
             writer.line(f"cw::extend({target}, {value});", node.span)
             return
+    checked = _CHECKED_AUG.get(node.op)
+    if checked is not None and is_int_arithmetic(
+        getattr(node.target, "value_type", None), getattr(node.value, "value_type", None)
+    ):
+        # The target is bound by reference, so it is evaluated once, as in
+        # Python: `xs[f()] += 1`.
+        writer.line(f"{checked}({target}, {value});", node.span)
+        return
     spelling = _AUG_SPELLING.get(node.op)
     if spelling is None:
         writer.line(

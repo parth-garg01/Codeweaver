@@ -80,7 +80,6 @@ __all__ = [
 
 UNMAPPED_BUILTINS: dict[str, str] = {
     "enumerate": "iterate with an index loop",
-    "zip": "index both sequences explicitly",
     "map": "use a comprehension",
     "filter": "use a comprehension with a condition",
     "reversed": "copy and reverse the list explicitly",
@@ -100,7 +99,6 @@ UNMAPPED_BUILTINS: dict[str, str] = {
     "hash": "use Objects.hashCode explicitly",
     "open": "file I/O is not translated; use java.nio.file.Files",
     "input": "console input is not translated; use a Scanner",
-    "format": "use an f-string",
 }
 
 _MATH_FUNCTIONS: dict[str, str] = {
@@ -377,6 +375,14 @@ def _external_name(qualified: str, node: IRNode, ctx: JavaContext) -> Emitted:
 # ----------------------------------------------------------------- operators
 
 
+#: int operators whose 64-bit result can overflow where Python's cannot.
+CHECKED_INT_OPS: dict[BinaryOp, str] = {
+    BinaryOp.ADD: "Py.add",
+    BinaryOp.SUB: "Py.sub",
+    BinaryOp.MUL: "Py.mul",
+}
+
+
 def _binary(node: IRBinary, ctx: JavaContext, expected: IRType | None) -> Emitted:
     left_type, right_type = _type(node.left), _type(node.right)
     both_int = _is_int(left_type) and _is_int(right_type)
@@ -414,6 +420,9 @@ def _binary(node: IRBinary, ctx: JavaContext, expected: IRType | None) -> Emitte
                 )
             if _is(sequence_type, "list"):
                 return Emitted(f"Py.repeat({sequence.text}, {count.text})", POSTFIX)
+    if op in CHECKED_INT_OPS and _is(left_type, "int") and _is(right_type, "int"):
+        # long overflows where Python's int cannot: throw instead of wrapping.
+        return Emitted(f"{CHECKED_INT_OPS[op]}({left.text}, {right.text})", POSTFIX)
     spelling, precedence = BINARY_SPELLING[op]
     if op is BinaryOp.SHIFT_RIGHT:
         spelling = ">>"
@@ -814,6 +823,9 @@ def _with_lambda_scope(
     ctx.renames.update(renames)
     for name in bound:
         ctx.renames.pop(name, None)
+        if name in saved_locals:
+            # Java rejects a lambda parameter that shadows a local in scope.
+            ctx.renames[name] = f"{safe_identifier(name)}_{ctx.temp('')}"
     try:
         return render()
     finally:
@@ -822,12 +834,13 @@ def _with_lambda_scope(
 
 def _lambda(node: IRLambda, ctx: JavaContext, expected: IRType | None) -> Emitted:
     names = [param.name for param in node.params]
-    params = ", ".join(safe_identifier(name) for name in names)
-    head = f"({params})" if len(names) != 1 else params
-    body = _with_lambda_scope(
-        names, node.body or IRLiteral(None), ctx, lambda: emit_expression(node.body, ctx).text
-    )
-    return Emitted(f"{head} -> {body}", LAMBDA)
+
+    def render() -> str:
+        params = ", ".join(ctx.local(name) for name in names)
+        head = f"({params})" if len(names) != 1 else params
+        return f"{head} -> {emit_expression(node.body, ctx).text}"
+
+    return Emitted(_with_lambda_scope(names, node.body or IRLiteral(None), ctx, render), LAMBDA)
 
 
 def _await(node: IRAwait, ctx: JavaContext, expected: IRType | None) -> Emitted:
@@ -852,7 +865,6 @@ def _iterable(node: IRNode, ctx: JavaContext) -> str:
 
 
 def _comprehension(node: IRComprehension, ctx: JavaContext, expected: IRType | None) -> Emitted:
-    variable = safe_identifier(node.target)
     iterable = _iterable(node.iterable, ctx)
     result_type = expected if expected is not None and _is(expected, node.form) else _type(node)
     element_ir = _element_of(result_type, 1 if node.form == "dict" else 0)
@@ -862,6 +874,7 @@ def _comprehension(node: IRComprehension, ctx: JavaContext, expected: IRType | N
     holder = IRTupleLiteral(list(bodies))  # type: ignore[arg-type]
 
     def render() -> str:
+        variable = ctx.local(node.target)
         pieces = [iterable]
         if node.condition is not None:
             pieces.append(f"{variable} -> {condition(node.condition, ctx)}")
@@ -1293,6 +1306,10 @@ def _builtin(name: str, node: IRCall, ctx: JavaContext, expected: IRType | None)
         return call(f"Py.str({joined})") if args else Emitted('""')
     if name == "repr" and len(args) == 1:
         return call(f"Py.repr({joined})")
+    if name == "zip" and len(args) in (2, 3) and not node.keywords:
+        return call(f"Py.zip({joined})")
+    if name == "format" and len(args) in (1, 2):
+        return call(f"Py.format({joined})")
     if name == "abs" and len(args) == 1:
         return call(f"Math.abs({joined})")
     if name == "ord" and len(args) == 1:

@@ -17,6 +17,13 @@
 #ifndef CW_RUNTIME_H
 #define CW_RUNTIME_H
 
+/* Python never fuses a multiply and an add, so neither may the compiler:
+ * FMA contraction (clang's default) changes results in the last bits. */
+#if defined(__clang__)
+#pragma STDC FP_CONTRACT OFF
+#endif
+
+#include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -307,12 +314,39 @@ static inline double cw_mod_f64(double a, double b) {
   return r;
 }
 
+/* int arithmetic. Python's int never overflows; int64_t does, and wrapping
+ * silently would print a wrong answer. These raise OverflowError instead (a
+ * flag test after the instruction). -DCW_UNCHECKED keeps two's-complement
+ * wrapping for maximum speed. */
+#if defined(CW_UNCHECKED) || !(defined(__GNUC__) || defined(__clang__))
+static inline int64_t cw_add_i64(int64_t a, int64_t b) { return (int64_t)((uint64_t)a + (uint64_t)b); }
+static inline int64_t cw_sub_i64(int64_t a, int64_t b) { return (int64_t)((uint64_t)a - (uint64_t)b); }
+static inline int64_t cw_mul_i64(int64_t a, int64_t b) { return (int64_t)((uint64_t)a * (uint64_t)b); }
+#else
+#define CW_OVERFLOW_MESSAGE "integer result does not fit in 64 bits (Python ints are unbounded)"
+static inline int64_t cw_add_i64(int64_t a, int64_t b) {
+  int64_t r;
+  if (__builtin_add_overflow(a, b, &r)) cw_raise("OverflowError", CW_OVERFLOW_MESSAGE);
+  return r;
+}
+static inline int64_t cw_sub_i64(int64_t a, int64_t b) {
+  int64_t r;
+  if (__builtin_sub_overflow(a, b, &r)) cw_raise("OverflowError", CW_OVERFLOW_MESSAGE);
+  return r;
+}
+static inline int64_t cw_mul_i64(int64_t a, int64_t b) {
+  int64_t r;
+  if (__builtin_mul_overflow(a, b, &r)) cw_raise("OverflowError", CW_OVERFLOW_MESSAGE);
+  return r;
+}
+#endif
+
 static inline int64_t cw_pow_i64(int64_t base, int64_t exponent) {
   int64_t result = 1;
   while (exponent > 0) {
-    if (exponent & 1) result *= base;
-    base *= base;
+    if (exponent & 1) result = cw_mul_i64(result, base);
     exponent >>= 1;
+    if (exponent) base = cw_mul_i64(base, base);
   }
   return result;
 }
@@ -322,10 +356,208 @@ static inline int64_t cw_abs_i64(int64_t value) { return value < 0 ? -value : va
 /* round(x): halves go to the even neighbour (rint's default mode). */
 static inline int64_t cw_round_i64(double value) { return (int64_t)rint(value); }
 
+/* round(x, n) as Python does it: the exact binary value is rounded to n
+ * decimal places (printf's %.*f is correctly rounded, ties to even), and the
+ * result read back. Scaling by 10**n first would add a rounding error. */
 static inline double cw_round_f64(double value, int64_t digits) {
-  double scale = pow(10.0, (double)digits);
-  double rounded = rint(value * scale) / scale;
-  return isfinite(rounded) ? rounded : value;
+  if (!isfinite(value) || digits > 323) return value;
+  if (digits < 0) {
+    double scale = pow(10.0, (double)-digits);
+    double rounded = rint(value / scale) * scale;
+    return isfinite(rounded) ? rounded : value;
+  }
+  char text[1100];
+  snprintf(text, sizeof text, "%.*f", (int)digits, value);
+  return strtod(text, NULL);
+}
+
+/* format(value, spec): Python's format-specification mini-language,
+ * [[fill]align][sign][#][0][width][,|_][.precision][type], for int, float,
+ * bool and str. f"{x:>8.2f}" is translated to format(x, ">8.2f"). */
+typedef struct {
+  char fill[5];
+  char align, sign, group, type;
+  bool alt, zero;
+  int64_t width, precision;
+} cw_fmt_spec;
+
+static inline size_t cw_fmt_code_points(const char* text) {
+  size_t count = 0;
+  for (; *text; ++text) count += ((unsigned char)*text & 0xC0) != 0x80;
+  return count;
+}
+
+static inline cw_fmt_spec cw_fmt_parse(cw_str spec) {
+  cw_fmt_spec out = {" ", 0, '-', 0, 0, false, false, -1, -1};
+  size_t n = strlen(spec), i = 0, fill_len = n ? 1 : 0;
+  while (fill_len < n && ((unsigned char)spec[fill_len] & 0xC0) == 0x80) ++fill_len;
+#define CW_IS_ALIGN(c) ((c) == '<' || (c) == '>' || (c) == '=' || (c) == '^')
+  if (fill_len < n && fill_len < 5 && CW_IS_ALIGN(spec[fill_len])) {
+    memcpy(out.fill, spec, fill_len);
+    out.fill[fill_len] = '\0';
+    out.align = spec[fill_len];
+    i = fill_len + 1;
+  } else if (n && CW_IS_ALIGN(spec[0])) {
+    out.align = spec[0];
+    i = 1;
+  }
+#undef CW_IS_ALIGN
+  if (i < n && (spec[i] == '+' || spec[i] == '-' || spec[i] == ' ')) out.sign = spec[i++];
+  if (i < n && spec[i] == '#') { out.alt = true; ++i; }
+  if (i < n && spec[i] == '0') { out.zero = true; ++i; }
+  if (i < n && spec[i] >= '0' && spec[i] <= '9') {
+    out.width = 0;
+    while (i < n && spec[i] >= '0' && spec[i] <= '9') out.width = out.width * 10 + (spec[i++] - '0');
+  }
+  if (i < n && (spec[i] == ',' || spec[i] == '_')) out.group = spec[i++];
+  if (i < n && spec[i] == '.') {
+    ++i;
+    if (!(i < n && spec[i] >= '0' && spec[i] <= '9')) cw_raise("ValueError", "Format specifier missing precision");
+    out.precision = 0;
+    while (i < n && spec[i] >= '0' && spec[i] <= '9') out.precision = out.precision * 10 + (spec[i++] - '0');
+  }
+  if (i < n) out.type = spec[i++];
+  if (i != n) cw_raise("ValueError", "Invalid format specifier");
+  return out;
+}
+
+/* Inserts `sep` every `every` digits of the leading run of digits in body. */
+static inline cw_str cw_fmt_group(const char* body, char sep, size_t every) {
+  size_t digits = strspn(body, "0123456789abcdefABCDEF");
+  if (every == 3) digits = strspn(body, "0123456789");
+  size_t rest = strlen(body + digits), lead = digits % every;
+  char* out = (char*)cw_alloc(digits * 2 + rest + 1);
+  size_t at = 0;
+  for (size_t i = 0; i < digits; ++i) {
+    if (i && i >= lead && (i - lead) % every == 0) out[at++] = sep;
+    out[at++] = body[i];
+  }
+  memcpy(out + at, body + digits, rest + 1);
+  return out;
+}
+
+static inline cw_str cw_fmt_pad(const char* prefix, const char* body, const cw_fmt_spec* spec, bool numeric) {
+  const char* fill = spec->fill;
+  char align = spec->align;
+  if (spec->zero && !align) { fill = "0"; align = '='; }
+  if (!align) align = numeric ? '>' : '<';
+  size_t length = cw_fmt_code_points(prefix) + cw_fmt_code_points(body);
+  size_t n = spec->width > 0 && (size_t)spec->width > length ? (size_t)spec->width - length : 0;
+  size_t fill_len = strlen(fill), left = 0, middle = 0, right = 0;
+  if (align == '<') right = n;
+  else if (align == '^') { left = n / 2; right = n - n / 2; }
+  else if (align == '=') middle = n;
+  else left = n;
+  size_t prefix_len = strlen(prefix), body_len = strlen(body);
+  char* out = (char*)cw_alloc(prefix_len + body_len + n * fill_len + 1);
+  char* at = out;
+  for (size_t k = 0; k < left; ++k) { memcpy(at, fill, fill_len); at += fill_len; }
+  memcpy(at, prefix, prefix_len); at += prefix_len;
+  for (size_t k = 0; k < middle; ++k) { memcpy(at, fill, fill_len); at += fill_len; }
+  memcpy(at, body, body_len); at += body_len;
+  for (size_t k = 0; k < right; ++k) { memcpy(at, fill, fill_len); at += fill_len; }
+  *at = '\0';
+  return out;
+}
+
+static inline const char* cw_fmt_sign(bool negative, const cw_fmt_spec* spec) {
+  if (negative) return "-";
+  if (spec->sign == '+') return "+";
+  if (spec->sign == ' ') return " ";
+  return "";
+}
+
+static inline cw_str cw_fmt_float(double value, const cw_fmt_spec* spec) {
+  char type = spec->type;
+  bool negative = signbit(value) != 0;
+  double magnitude = fabs(value);
+  bool upper = type == 'F' || type == 'E' || type == 'G';
+  int precision = spec->precision < 0 ? 6 : (int)spec->precision;
+  char* body = (char*)cw_alloc(1110);
+  if (isnan(value) || isinf(value)) {
+    if (isnan(value)) negative = false;
+    snprintf(body, 1110, "%s%s", isnan(value) ? "nan" : "inf", type == '%' ? "%" : "");
+  } else if (type == 'f' || type == 'F') {
+    snprintf(body, 1110, spec->alt ? "%#.*f" : "%.*f", precision, magnitude);
+  } else if (type == 'e' || type == 'E') {
+    snprintf(body, 1110, spec->alt ? "%#.*e" : "%.*e", precision, magnitude);
+  } else if (type == 'g' || type == 'G') {
+    snprintf(body, 1110, spec->alt ? "%#.*g" : "%.*g", precision == 0 ? 1 : precision, magnitude);
+  } else if (type == '%') {
+    snprintf(body, 1110, spec->alt ? "%#.*f%%" : "%.*f%%", precision, magnitude * 100.0);
+  } else if (type == 0 || type == 'n') {
+    if (spec->precision < 0) {
+      snprintf(body, 1110, "%s", cw_str_f64(magnitude));
+    } else {
+      snprintf(body, 1110, "%.*g", spec->precision == 0 ? 1 : (int)spec->precision, magnitude);
+      if (!strpbrk(body, ".e")) strcat(body, ".0");
+    }
+  } else {
+    cw_raise("ValueError", "Unknown format code for object of type 'float'");
+  }
+  if (upper) for (char* c = body; *c; ++c) *c = (char)toupper((unsigned char)*c);
+  cw_str grouped = spec->group ? cw_fmt_group(body, spec->group, 3) : body;
+  return cw_fmt_pad(cw_fmt_sign(negative, spec), grouped, spec, true);
+}
+
+static inline cw_str cw_fmt_int(int64_t value, const cw_fmt_spec* spec) {
+  char type = spec->type;
+  if (type && strchr("eEfFgG%", type)) return cw_fmt_float((double)value, spec);
+  if (spec->precision >= 0) cw_raise("ValueError", "Precision not allowed in integer format specifier");
+  bool negative = value < 0;
+  uint64_t magnitude = negative ? 0 - (uint64_t)value : (uint64_t)value;
+  unsigned base = 10;
+  if (type == 'x' || type == 'X') base = 16;
+  else if (type == 'o') base = 8;
+  else if (type == 'b') base = 2;
+  else if (type != 0 && type != 'd' && type != 'n') cw_raise("ValueError", "Unknown format code for object of type 'int'");
+  const char* alphabet = type == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+  char digits[70];
+  int at = 69;
+  digits[at] = '\0';
+  do { digits[--at] = alphabet[magnitude % base]; magnitude /= base; } while (magnitude);
+  char prefix[4] = "";
+  strcpy(prefix, cw_fmt_sign(negative, spec));
+  if (spec->alt && base != 10) strcat(prefix, base == 16 ? (type == 'X' ? "0X" : "0x") : base == 8 ? "0o" : "0b");
+  cw_str body = spec->group ? cw_fmt_group(digits + at, spec->group, base == 10 ? 3 : 4) : digits + at;
+  return cw_fmt_pad(prefix, body, spec, true);
+}
+
+static inline cw_str cw_format_i64(int64_t value, cw_str spec) {
+  if (!*spec) return cw_str_i64(value);
+  cw_fmt_spec parsed = cw_fmt_parse(spec);
+  return cw_fmt_int(value, &parsed);
+}
+
+static inline cw_str cw_format_bool(bool value, cw_str spec) {
+  if (!*spec) return value ? "True" : "False";
+  cw_fmt_spec parsed = cw_fmt_parse(spec);
+  return cw_fmt_int(value ? 1 : 0, &parsed);
+}
+
+static inline cw_str cw_format_f64(double value, cw_str spec) {
+  if (!*spec) return cw_str_f64(value);
+  cw_fmt_spec parsed = cw_fmt_parse(spec);
+  return cw_fmt_float(value, &parsed);
+}
+
+static inline cw_str cw_format_str(cw_str value, cw_str spec) {
+  if (!*spec) return value;
+  cw_fmt_spec parsed = cw_fmt_parse(spec);
+  if (parsed.type != 0 && parsed.type != 's') cw_raise("ValueError", "Unknown format code for object of type 'str'");
+  if (parsed.sign != '-') cw_raise("ValueError", "Sign not allowed in string format specifier");
+  if (parsed.align == '=') cw_raise("ValueError", "'=' alignment not allowed in string format specifier");
+  cw_str body = value;
+  if (parsed.precision >= 0) {
+    size_t at = 0, kept = 0, n = strlen(value);
+    while (at < n && kept < (size_t)parsed.precision) {
+      ++at;
+      while (at < n && ((unsigned char)value[at] & 0xC0) == 0x80) ++at;
+      ++kept;
+    }
+    body = cw_strdup_n(value, at);
+  }
+  return cw_fmt_pad("", body, &parsed, false);
 }
 
 static inline int64_t cw_int_from_str(cw_str text) {
@@ -367,6 +599,59 @@ static inline int64_t cw_clamp(bool present, int64_t value, int64_t length, int6
 }
 
 /* Defines a growable list of T named cw_list_NAME, with Python semantics. */
+/* text[lower:upper:step], clamped as Python clamps slice bounds. */
+static inline cw_str cw_str_slice(cw_str text, bool has_lower, int64_t lower, bool has_upper,
+                                  int64_t upper, int64_t step) {
+  if (step == 0) cw_raise("ValueError", "slice step cannot be zero");
+  int64_t n = (int64_t)strlen(text);
+  if (step == 1) {
+    int64_t first = cw_clamp(has_lower, lower, n, 0);
+    int64_t last = cw_clamp(has_upper, upper, n, n);
+    return first < last ? cw_strdup_n(text + first, (size_t)(last - first)) : "";
+  }
+  char* out = (char*)cw_alloc((size_t)n + 1);
+  size_t at = 0;
+  if (step > 0) {
+    int64_t first = cw_clamp(has_lower, lower, n, 0);
+    int64_t last = cw_clamp(has_upper, upper, n, n);
+    for (int64_t i = first; i < last; i += step) out[at++] = text[i];
+  } else {
+    int64_t first = has_lower ? (lower < 0 ? lower + n : (lower >= n ? n - 1 : lower)) : n - 1;
+    int64_t last = has_upper ? (upper < 0 ? upper + n : upper) : -1;
+    if (last < -1) last = -1;
+    for (int64_t i = first; i > last; i += step) out[at++] = text[i];
+  }
+  out[at] = '\0';
+  return out;
+}
+
+/* str.count(sub): non-overlapping occurrences; an empty sub matches n + 1 times. */
+static inline int64_t cw_str_count(cw_str text, cw_str sub) {
+  size_t step = strlen(sub);
+  if (step == 0) return (int64_t)strlen(text) + 1;
+  int64_t count = 0;
+  for (const char* at = strstr(text, sub); at; at = strstr(at + step, sub)) ++count;
+  return count;
+}
+
+/* chr(code): the UTF-8 encoding of one code point. */
+static inline cw_str cw_chr(int64_t code) {
+  if (code < 0 || code > 0x10FFFF) cw_raise("ValueError", "chr() arg not in range(0x110000)");
+  char* out = (char*)cw_alloc(5);
+  if (code < 0x80) {
+    out[0] = (char)code; out[1] = '\0';
+  } else if (code < 0x800) {
+    out[0] = (char)(0xC0 | (code >> 6)); out[1] = (char)(0x80 | (code & 0x3F)); out[2] = '\0';
+  } else if (code < 0x10000) {
+    out[0] = (char)(0xE0 | (code >> 12)); out[1] = (char)(0x80 | ((code >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (code & 0x3F)); out[3] = '\0';
+  } else {
+    out[0] = (char)(0xF0 | (code >> 18)); out[1] = (char)(0x80 | ((code >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((code >> 6) & 0x3F)); out[3] = (char)(0x80 | (code & 0x3F)); out[4] = '\0';
+  }
+  return out;
+}
+
 #define CW_DEFINE_LIST(NAME, T, EQ, REPR)                                                  \
   typedef struct cw_list_##NAME {                                                          \
     int64_t len;                                                                           \

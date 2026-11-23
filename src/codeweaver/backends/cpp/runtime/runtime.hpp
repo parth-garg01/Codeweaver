@@ -11,12 +11,19 @@
 // only appropriate once the translated program is known to be correct.
 #pragma once
 
+// Python never fuses a multiply and an add, so neither may the compiler:
+// FMA contraction (clang's default) changes results in the last bits.
+#if defined(__clang__)
+#pragma STDC FP_CONTRACT OFF
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <initializer_list>
@@ -312,6 +319,44 @@ auto mod(A a, B b) {
   }
 }
 
+// int arithmetic. Python's int never overflows; int64_t does, and wrapping
+// silently would print a wrong answer. These raise OverflowError instead (a
+// flag test after the instruction). -DCW_UNCHECKED keeps two's-complement
+// wrapping for maximum speed.
+[[noreturn]] inline void int_overflow() {
+  throw OverflowError("integer result does not fit in 64 bits (Python ints are unbounded)");
+}
+#if defined(CW_UNCHECKED) || !(defined(__GNUC__) || defined(__clang__))
+inline std::int64_t checked_add(std::int64_t a, std::int64_t b) {
+  return static_cast<std::int64_t>(static_cast<std::uint64_t>(a) + static_cast<std::uint64_t>(b));
+}
+inline std::int64_t checked_sub(std::int64_t a, std::int64_t b) {
+  return static_cast<std::int64_t>(static_cast<std::uint64_t>(a) - static_cast<std::uint64_t>(b));
+}
+inline std::int64_t checked_mul(std::int64_t a, std::int64_t b) {
+  return static_cast<std::int64_t>(static_cast<std::uint64_t>(a) * static_cast<std::uint64_t>(b));
+}
+#else
+inline std::int64_t checked_add(std::int64_t a, std::int64_t b) {
+  std::int64_t r;
+  if (__builtin_add_overflow(a, b, &r)) int_overflow();
+  return r;
+}
+inline std::int64_t checked_sub(std::int64_t a, std::int64_t b) {
+  std::int64_t r;
+  if (__builtin_sub_overflow(a, b, &r)) int_overflow();
+  return r;
+}
+inline std::int64_t checked_mul(std::int64_t a, std::int64_t b) {
+  std::int64_t r;
+  if (__builtin_mul_overflow(a, b, &r)) int_overflow();
+  return r;
+}
+#endif
+template <class T> void iadd(T& target, std::int64_t value) { target = checked_add(target, value); }
+template <class T> void isub(T& target, std::int64_t value) { target = checked_sub(target, value); }
+template <class T> void imul(T& target, std::int64_t value) { target = checked_mul(target, value); }
+
 template <class A, class B>
 auto pow(A base, B exponent) {
   if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {
@@ -323,9 +368,9 @@ auto pow(A base, B exponent) {
     std::int64_t factor = static_cast<std::int64_t>(base);
     std::int64_t remaining = static_cast<std::int64_t>(exponent);
     while (remaining > 0) {
-      if (remaining & 1) result *= factor;
-      factor *= factor;
+      if (remaining & 1) result = checked_mul(result, factor);
       remaining >>= 1;
+      if (remaining) factor = checked_mul(factor, factor);
     }
     return result;
   } else {
@@ -353,8 +398,19 @@ std::int64_t round(T value) {
 }
 template <class T>
 double round(T value, std::int64_t digits) {
-  double scale = std::pow(10.0, static_cast<double>(digits));
-  return std::nearbyint(static_cast<double>(value) * scale) / scale;
+  // As Python does it: the exact binary value is rounded to `digits` places
+  // (printf's %.*f is correctly rounded, ties to even) and read back.
+  // Scaling by 10**digits first would add a rounding error of its own.
+  double x = static_cast<double>(value);
+  if (!std::isfinite(x) || digits > 323) return x;
+  if (digits < 0) {
+    double scale = std::pow(10.0, static_cast<double>(-digits));
+    double rounded = std::nearbyint(x / scale) * scale;
+    return std::isfinite(rounded) ? rounded : x;
+  }
+  char text[1100];
+  std::snprintf(text, sizeof text, "%.*f", static_cast<int>(digits), x);
+  return std::strtod(text, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +604,206 @@ void print(const Args&... args) {
   std::fwrite(line.data(), 1, line.size(), stdout);
 }
 
+// format(value, spec): Python's format-specification mini-language,
+// [[fill]align][sign][#][0][width][,|_][.precision][type], for int, float,
+// bool and str. f"{x:>8.2f}" is translated to format(x, ">8.2f").
+namespace fmt_detail {
+struct Spec {
+  std::string fill = " ";
+  char align = 0, sign = '-', group = 0, type = 0;
+  bool alt = false, zero = false;
+  std::int64_t width = -1, precision = -1;
+};
+
+inline std::size_t code_points(const std::string& text) {
+  std::size_t count = 0;
+  for (unsigned char c : text) count += (c & 0xC0) != 0x80;
+  return count;
+}
+
+inline Spec parse(std::string_view spec) {
+  Spec out;
+  std::size_t i = 0;
+  auto is_align = [](char c) { return c == '<' || c == '>' || c == '=' || c == '^'; };
+  // The fill may be any one character, including a multi-byte one.
+  std::size_t fill_len = spec.empty() ? 0 : 1;
+  while (fill_len < spec.size() && (static_cast<unsigned char>(spec[fill_len]) & 0xC0) == 0x80) ++fill_len;
+  if (fill_len < spec.size() && is_align(spec[fill_len])) {
+    out.fill = std::string(spec.substr(0, fill_len));
+    out.align = spec[fill_len];
+    i = fill_len + 1;
+  } else if (!spec.empty() && is_align(spec[0])) {
+    out.align = spec[0];
+    i = 1;
+  }
+  if (i < spec.size() && (spec[i] == '+' || spec[i] == '-' || spec[i] == ' ')) out.sign = spec[i++];
+  if (i < spec.size() && spec[i] == '#') { out.alt = true; ++i; }
+  if (i < spec.size() && spec[i] == '0') { out.zero = true; ++i; }
+  auto digits = [&](std::int64_t& into) {
+    std::size_t start = i;
+    std::int64_t value = 0;
+    while (i < spec.size() && spec[i] >= '0' && spec[i] <= '9') value = value * 10 + (spec[i++] - '0');
+    if (i > start) into = value;
+    return i > start;
+  };
+  digits(out.width);
+  if (i < spec.size() && (spec[i] == ',' || spec[i] == '_')) out.group = spec[i++];
+  if (i < spec.size() && spec[i] == '.') {
+    ++i;
+    if (!digits(out.precision)) throw ValueError("Format specifier missing precision");
+  }
+  if (i < spec.size()) out.type = spec[i++];
+  if (i != spec.size()) throw ValueError("Invalid format specifier '" + std::string(spec) + "'");
+  return out;
+}
+
+inline std::string group_digits(const std::string& digits, char sep, std::size_t every) {
+  std::string out;
+  std::size_t lead = digits.size() % every;
+  for (std::size_t i = 0; i < digits.size(); ++i) {
+    if (i && (i - lead) % every == 0 && i >= lead) out.push_back(sep);
+    out.push_back(digits[i]);
+  }
+  return out;
+}
+
+// Groups the integer part of a decimal number written without a sign.
+inline std::string group_number(const std::string& body, char sep) {
+  std::size_t end = body.find_first_not_of("0123456789");
+  if (end == std::string::npos) end = body.size();
+  return group_digits(body.substr(0, end), sep, 3) + body.substr(end);
+}
+
+inline std::string pad(const std::string& prefix, const std::string& body, const Spec& spec, bool numeric) {
+  std::string fill = spec.fill;
+  char align = spec.align;
+  if (spec.zero && !align) { fill = "0"; align = '='; }
+  if (!align) align = numeric ? '>' : '<';
+  std::size_t length = code_points(prefix) + code_points(body);
+  if (spec.width <= 0 || static_cast<std::size_t>(spec.width) <= length) return prefix + body;
+  std::size_t n = static_cast<std::size_t>(spec.width) - length;
+  auto repeat = [&](std::size_t count) { std::string out; for (std::size_t k = 0; k < count; ++k) out += fill; return out; };
+  switch (align) {
+    case '<': return prefix + body + repeat(n);
+    case '^': return repeat(n / 2) + prefix + body + repeat(n - n / 2);
+    case '=': return prefix + repeat(n) + body;
+    default: return repeat(n) + prefix + body;
+  }
+}
+
+inline std::string sign_of(bool negative, const Spec& spec) {
+  if (negative) return "-";
+  if (spec.sign == '+') return "+";
+  if (spec.sign == ' ') return " ";
+  return "";
+}
+
+inline std::string printf_double(const char* pattern, std::int64_t precision, double value) {
+  char text[1100];
+  std::snprintf(text, sizeof text, pattern, static_cast<int>(precision), value);
+  return text;
+}
+
+inline std::string format_float(double value, const Spec& spec);
+
+inline std::string format_int(std::int64_t value, const Spec& spec) {
+  char type = spec.type;
+  if (type == 'e' || type == 'E' || type == 'f' || type == 'F' || type == 'g' || type == 'G' || type == '%') {
+    return format_float(static_cast<double>(value), spec);
+  }
+  if (spec.precision >= 0) throw ValueError("Precision not allowed in integer format specifier");
+  bool negative = value < 0;
+  std::uint64_t magnitude = negative ? 0 - static_cast<std::uint64_t>(value) : static_cast<std::uint64_t>(value);
+  std::string prefix = sign_of(negative, spec), digits;
+  unsigned base = 10;
+  if (type == 'x' || type == 'X') base = 16;
+  else if (type == 'o') base = 8;
+  else if (type == 'b') base = 2;
+  else if (type != 0 && type != 'd' && type != 'n') throw ValueError(std::string("Unknown format code '") + type + "' for object of type 'int'");
+  const char* alphabet = type == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+  do { digits.insert(digits.begin(), alphabet[magnitude % base]); magnitude /= base; } while (magnitude);
+  if (spec.alt && base != 10) prefix += base == 16 ? (type == 'X' ? "0X" : "0x") : base == 8 ? "0o" : "0b";
+  if (spec.group) digits = group_digits(digits, spec.group, base == 10 ? 3 : 4);
+  return pad(prefix, digits, spec, true);
+}
+
+inline std::string format_float(double value, const Spec& spec) {
+  char type = spec.type;
+  bool negative = std::signbit(value);
+  double magnitude = std::fabs(value);
+  std::string body;
+  bool upper = type == 'F' || type == 'E' || type == 'G';
+  if (std::isnan(value) || std::isinf(value)) {
+    body = std::isnan(value) ? (upper ? "NAN" : "nan") : (upper ? "INF" : "inf");
+    if (std::isnan(value)) negative = false;
+    if (type == '%') body += "%";
+  } else if (type == 'f' || type == 'F') {
+    body = printf_double(spec.alt ? "%#.*f" : "%.*f", spec.precision < 0 ? 6 : spec.precision, magnitude);
+  } else if (type == 'e' || type == 'E') {
+    body = printf_double(spec.alt ? "%#.*e" : "%.*e", spec.precision < 0 ? 6 : spec.precision, magnitude);
+  } else if (type == 'g' || type == 'G') {
+    std::int64_t precision = spec.precision < 0 ? 6 : (spec.precision == 0 ? 1 : spec.precision);
+    body = printf_double(spec.alt ? "%#.*g" : "%.*g", precision, magnitude);
+  } else if (type == '%') {
+    body = printf_double(spec.alt ? "%#.*f" : "%.*f", spec.precision < 0 ? 6 : spec.precision, magnitude * 100.0) + "%";
+  } else if (type == 0 || type == 'n') {
+    if (spec.precision < 0) {
+      body = str(magnitude);
+    } else {
+      body = printf_double("%.*g", spec.precision == 0 ? 1 : spec.precision, magnitude);
+      if (body.find_first_of(".e") == std::string::npos) body += ".0";
+    }
+  } else {
+    throw ValueError(std::string("Unknown format code '") + type + "' for object of type 'float'");
+  }
+  if (upper) for (char& c : body) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  if (spec.group) body = group_number(body, spec.group);
+  return pad(sign_of(negative, spec), body, spec, true);
+}
+
+inline std::string format_str(const std::string& value, const Spec& spec) {
+  if (spec.type != 0 && spec.type != 's') throw ValueError(std::string("Unknown format code '") + spec.type + "' for object of type 'str'");
+  if (spec.sign != '-') throw ValueError("Sign not allowed in string format specifier");
+  if (spec.align == '=') throw ValueError("'=' alignment not allowed in string format specifier");
+  std::string body = value;
+  if (spec.precision >= 0) {
+    std::size_t kept = 0, at = 0;
+    while (at < body.size() && kept < static_cast<std::size_t>(spec.precision)) {
+      ++at;
+      while (at < body.size() && (static_cast<unsigned char>(body[at]) & 0xC0) == 0x80) ++at;
+      ++kept;
+    }
+    body.resize(at);
+  }
+  return pad("", body, spec, false);
+}
+}  // namespace fmt_detail
+
+template <class T>
+std::string format(const T& value, std::string_view spec = {}) {
+  using U = bare<T>;
+  if (spec.empty()) return str(value);
+  fmt_detail::Spec parsed = fmt_detail::parse(spec);
+  if constexpr (std::is_same_v<U, bool>) {
+    return fmt_detail::format_int(value ? 1 : 0, parsed);
+  } else if constexpr (std::is_integral_v<U>) {
+    return fmt_detail::format_int(static_cast<std::int64_t>(value), parsed);
+  } else if constexpr (std::is_floating_point_v<U>) {
+    return fmt_detail::format_float(static_cast<double>(value), parsed);
+  } else {
+    return fmt_detail::format_str(str(value), parsed);
+  }
+}
+
+// print() whose arguments must be evaluated left to right, as Python does:
+// the operands of a braced initialiser are sequenced in order, those of a
+// function call are not. Arguments are taken by value so that a later
+// argument cannot change what an earlier one already read.
+struct print_ordered {
+  template <class... Args>
+  print_ordered(Args... args) { print(args...); }
+};
+
 // ---------------------------------------------------------------------------
 // Conversions
 
@@ -603,10 +859,12 @@ std::int64_t len(const C& container) {
   }
 }
 
-inline std::size_t normalise_index(std::int64_t index, std::size_t size) {
+inline std::size_t normalise_index(std::int64_t index, std::size_t size, const char* what = "list") {
   std::int64_t position = index < 0 ? index + static_cast<std::int64_t>(size) : index;
 #ifndef CW_UNCHECKED
-  if (position < 0 || position >= static_cast<std::int64_t>(size)) throw IndexError("index out of range");
+  if (position < 0 || position >= static_cast<std::int64_t>(size)) {
+    throw IndexError(std::string(what) + " index out of range");
+  }
 #endif
   return static_cast<std::size_t>(position);
 }
@@ -626,7 +884,7 @@ inline bool at(const std::vector<bool>& values, std::int64_t index) {
   return values[normalise_index(index, values.size())];
 }
 inline std::string at(const std::string& text, std::int64_t index) {
-  return std::string(1, text[normalise_index(index, text.size())]);
+  return std::string(1, text[normalise_index(index, text.size(), "string")]);
 }
 template <class K, class V, class Key>
 V& at(dict<K, V>& values, const Key& key) {
@@ -969,6 +1227,19 @@ std::vector<V> values(const dict<K, V>& entries) {
   for (const auto& entry : entries) out.push_back(entry.second);
   return out;
 }
+// zip(a, b, ...): tuples of the items at each position, stopping at the
+// shortest sequence. The result is a list, which is what iterating, list() or
+// a comprehension over a zip object observes.
+template <class... Seqs>
+auto zip(const Seqs&... seqs) {
+  using Row = std::tuple<bare<decltype(*std::begin(seqs))>...>;
+  std::size_t n = std::min({static_cast<std::size_t>(std::size(seqs))...});
+  std::vector<Row> out;
+  out.reserve(n);
+  for (std::size_t i = 0; i < n; ++i) out.emplace_back(*(std::begin(seqs) + i)...);
+  return out;
+}
+
 template <class K, class V>
 std::vector<std::tuple<K, V>> items(const dict<K, V>& entries) {
   std::vector<std::tuple<K, V>> out;

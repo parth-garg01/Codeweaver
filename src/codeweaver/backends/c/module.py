@@ -600,7 +600,13 @@ def _emit_body(function: IRFunction, block: IRBlock, writer: CodeWriter, ctx: CC
             # Python would return None here; this C return type has no None.
             into.line('cw_raise("TypeError", "function ended without returning a value");')
 
-    _guarded(writer, ctx, function.name, body, broken=not signature_ok)
+    # A stub disables the body, so parameters only the body read become unused.
+    stub_voids = [
+        safe_identifier(param.name) for param in function.params if param.name in names_used
+    ]
+    if ctx.receiver and ctx.receiver in names_used:
+        stub_voids.insert(0, "self")
+    _guarded(writer, ctx, function.name, body, broken=not signature_ok, stub_voids=stub_voids)
     ctx.function = None
     ctx.locals = set()
     ctx.receiver = ""
@@ -629,6 +635,7 @@ def _guarded(
     emit: Callable[[CodeWriter], None],
     *,
     broken: bool = False,
+    stub_voids: list[str] | None = None,
 ) -> None:
     """Write *emit*'s statements, or a stub if they contain a gap.
 
@@ -648,6 +655,8 @@ def _guarded(
         return
     for gap in ctx.gaps[before:]:
         writer.line(ctx.marker(gap), gap.span)
+    for name in stub_voids or []:
+        writer.line(f"(void){name};")
     writer.line(
         f"cw_unsupported({c_string_literal(f'{what} uses constructs not translated to C', trigraphs=True)});"
     )

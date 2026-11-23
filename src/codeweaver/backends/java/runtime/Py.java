@@ -118,17 +118,45 @@ public final class Py {
 
     // ---------------------------------------------------------------- tuples
 
-    public record Tuple2<A, B>(A _0, B _1) {
+    /** Python's ordering of tuple items: element by element, then by length. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static int compareItems(Object a, Object b) {
+        if (a instanceof Number x && b instanceof Number y && !(a instanceof Double) && !(b instanceof Double)) {
+            return Long.compare(x.longValue(), y.longValue());
+        }
+        if (a instanceof Number x && b instanceof Number y) {
+            return Double.compare(x.doubleValue(), y.doubleValue());
+        }
+        if (a instanceof Comparable c) return c.compareTo(b);
+        throw new TypeError("'<' not supported between instances of these types");
+    }
+
+    public record Tuple2<A, B>(A _0, B _1) implements Comparable<Tuple2<A, B>> {
         @Override public String toString() { return "(" + repr(_0) + ", " + repr(_1) + ")"; }
+        @Override public int compareTo(Tuple2<A, B> o) {
+            int c = compareItems(_0, o._0);
+            return c != 0 ? c : compareItems(_1, o._1);
+        }
     }
 
-    public record Tuple3<A, B, C>(A _0, B _1, C _2) {
+    public record Tuple3<A, B, C>(A _0, B _1, C _2) implements Comparable<Tuple3<A, B, C>> {
         @Override public String toString() { return "(" + repr(_0) + ", " + repr(_1) + ", " + repr(_2) + ")"; }
+        @Override public int compareTo(Tuple3<A, B, C> o) {
+            int c = compareItems(_0, o._0);
+            if (c == 0) c = compareItems(_1, o._1);
+            return c != 0 ? c : compareItems(_2, o._2);
+        }
     }
 
-    public record Tuple4<A, B, C, D>(A _0, B _1, C _2, D _3) {
+    public record Tuple4<A, B, C, D>(A _0, B _1, C _2, D _3) implements Comparable<Tuple4<A, B, C, D>> {
         @Override public String toString() {
             return "(" + repr(_0) + ", " + repr(_1) + ", " + repr(_2) + ", " + repr(_3) + ")";
+        }
+        @Override public int compareTo(Tuple4<A, B, C, D> o) {
+            int c = compareItems(_0, o._0);
+            if (c == 0) c = compareItems(_1, o._1);
+            if (c == 0) c = compareItems(_2, o._2);
+            return c != 0 ? c : compareItems(_3, o._3);
         }
     }
 
@@ -279,17 +307,232 @@ public final class Py {
         long result = 1;
         long factor = base;
         while (exponent > 0) {
-            if ((exponent & 1) == 1) result *= factor;
-            factor *= factor;
+            if ((exponent & 1) == 1) result = Math.multiplyExact(result, factor);
             exponent >>= 1;
+            if (exponent > 0) factor = Math.multiplyExact(factor, factor);
         }
         return result;
     }
 
+    // ------------------------------------------------------------- format
+
+    /**
+     * format(value, spec): Python's format-specification mini-language,
+     * [[fill]align][sign][#][0][width][,|_][.precision][type], for int, float,
+     * bool and str. f"{x:>8.2f}" is translated to format(x, ">8.2f").
+     */
+    public static String format(Object value, String spec) {
+        if (spec.isEmpty()) return str(value);
+        FormatSpec parsed = FormatSpec.parse(spec);
+        if (value instanceof Boolean b) return formatInt(b ? 1 : 0, parsed);
+        if (value instanceof Double || value instanceof Float) return formatFloat(((Number) value).doubleValue(), parsed);
+        if (value instanceof Number n) return formatInt(n.longValue(), parsed);
+        return formatStr(str(value), parsed);
+    }
+
+    public static String format(Object value) { return str(value); }
+
+    static final class FormatSpec {
+        String fill = " ";
+        char align = 0, sign = '-', group = 0, type = 0;
+        boolean alt = false, zero = false;
+        int width = -1, precision = -1;
+
+        static boolean isAlign(int c) { return c == '<' || c == '>' || c == '=' || c == '^'; }
+
+        static FormatSpec parse(String spec) {
+            FormatSpec out = new FormatSpec();
+            int i = 0;
+            int fillLen = spec.isEmpty() ? 0 : Character.charCount(spec.codePointAt(0));
+            if (fillLen < spec.length() && isAlign(spec.charAt(fillLen))) {
+                out.fill = spec.substring(0, fillLen);
+                out.align = spec.charAt(fillLen);
+                i = fillLen + 1;
+            } else if (!spec.isEmpty() && isAlign(spec.charAt(0))) {
+                out.align = spec.charAt(0);
+                i = 1;
+            }
+            if (i < spec.length() && "+- ".indexOf(spec.charAt(i)) >= 0) out.sign = spec.charAt(i++);
+            if (i < spec.length() && spec.charAt(i) == '#') { out.alt = true; i++; }
+            if (i < spec.length() && spec.charAt(i) == '0') { out.zero = true; i++; }
+            int start = i;
+            while (i < spec.length() && Character.isDigit(spec.charAt(i))) i++;
+            if (i > start) out.width = Integer.parseInt(spec.substring(start, i));
+            if (i < spec.length() && (spec.charAt(i) == ',' || spec.charAt(i) == '_')) out.group = spec.charAt(i++);
+            if (i < spec.length() && spec.charAt(i) == '.') {
+                start = ++i;
+                while (i < spec.length() && Character.isDigit(spec.charAt(i))) i++;
+                if (i == start) throw new IllegalArgumentException("Format specifier missing precision");
+                out.precision = Integer.parseInt(spec.substring(start, i));
+            }
+            if (i < spec.length()) out.type = spec.charAt(i++);
+            if (i != spec.length()) throw new IllegalArgumentException("Invalid format specifier '" + spec + "'");
+            return out;
+        }
+    }
+
+    static String groupDigits(String digits, char sep, int every) {
+        StringBuilder out = new StringBuilder();
+        int lead = digits.length() % every;
+        for (int i = 0; i < digits.length(); i++) {
+            if (i > 0 && i >= lead && (i - lead) % every == 0) out.append(sep);
+            out.append(digits.charAt(i));
+        }
+        return out.toString();
+    }
+
+    static String pad(String prefix, String body, FormatSpec spec, boolean numeric) {
+        String fill = spec.fill;
+        char align = spec.align;
+        if (spec.zero && align == 0) { fill = "0"; align = '='; }
+        if (align == 0) align = numeric ? '>' : '<';
+        int length = prefix.codePointCount(0, prefix.length()) + body.codePointCount(0, body.length());
+        if (spec.width <= length) return prefix + body;
+        int n = spec.width - length;
+        switch (align) {
+            case '<': return prefix + body + fill.repeat(n);
+            case '^': return fill.repeat(n / 2) + prefix + body + fill.repeat(n - n / 2);
+            case '=': return prefix + fill.repeat(n) + body;
+            default: return fill.repeat(n) + prefix + body;
+        }
+    }
+
+    static String signOf(boolean negative, FormatSpec spec) {
+        if (negative) return "-";
+        if (spec.sign == '+') return "+";
+        if (spec.sign == ' ') return " ";
+        return "";
+    }
+
+    static String formatInt(long value, FormatSpec spec) {
+        char type = spec.type;
+        if ("eEfFgG%".indexOf(type) >= 0 && type != 0) return formatFloat((double) value, spec);
+        if (spec.precision >= 0) throw new IllegalArgumentException("Precision not allowed in integer format specifier");
+        boolean negative = value < 0;
+        java.math.BigInteger magnitude = java.math.BigInteger.valueOf(value).abs();
+        String prefix = signOf(negative, spec);
+        int base;
+        switch (type) {
+            case 'x': case 'X': base = 16; break;
+            case 'o': base = 8; break;
+            case 'b': base = 2; break;
+            case 0: case 'd': case 'n': base = 10; break;
+            default: throw new IllegalArgumentException("Unknown format code '" + type + "' for object of type 'int'");
+        }
+        String digits = magnitude.toString(base);
+        if (type == 'X') digits = digits.toUpperCase();
+        if (spec.alt && base != 10) prefix += base == 16 ? (type == 'X' ? "0X" : "0x") : base == 8 ? "0o" : "0b";
+        if (spec.group != 0) digits = groupDigits(digits, spec.group, base == 10 ? 3 : 4);
+        return pad(prefix, digits, spec, true);
+    }
+
+    /** printf-style fixed/exponent formatting from the exact binary value, rounded half to even. */
+    static String fixed(double magnitude, int precision) {
+        return new java.math.BigDecimal(magnitude).setScale(precision, java.math.RoundingMode.HALF_EVEN).toPlainString();
+    }
+
+    static String exponent(double magnitude, int precision, boolean alt) {
+        if (magnitude == 0.0) {
+            return (precision > 0 ? "0." + "0".repeat(precision) : (alt ? "0." : "0")) + "e+00";
+        }
+        java.math.BigDecimal exact = new java.math.BigDecimal(magnitude);
+        java.math.BigDecimal rounded = exact.round(new java.math.MathContext(precision + 1, java.math.RoundingMode.HALF_EVEN));
+        String digits = rounded.unscaledValue().toString();
+        int exp = digits.length() - 1 - rounded.scale();
+        digits = (digits + "0".repeat(precision + 1)).substring(0, precision + 1);
+        String mantissa = digits.substring(0, 1) + (precision > 0 ? "." + digits.substring(1) : (alt ? "." : ""));
+        return mantissa + (exp < 0 ? "e-" : "e+") + (Math.abs(exp) < 10 ? "0" : "") + Math.abs(exp);
+    }
+
+    /** C's %g: precision significant digits, trailing zeros removed unless alt. */
+    static String general(double magnitude, int precision, boolean alt) {
+        if (precision == 0) precision = 1;
+        int exp;
+        if (magnitude == 0.0) {
+            exp = 0;
+        } else {
+            String e = exponent(magnitude, precision - 1, false);
+            exp = Integer.parseInt(e.substring(e.indexOf('e') + 1));
+        }
+        String body;
+        if (exp >= -4 && exp < precision) {
+            body = fixed(magnitude, precision - 1 - exp);
+            if (alt && body.indexOf('.') < 0) body += ".";
+        } else {
+            body = exponent(magnitude, precision - 1, alt);
+        }
+        if (!alt) {
+            int e = body.indexOf('e');
+            String mantissa = e < 0 ? body : body.substring(0, e);
+            String tail = e < 0 ? "" : body.substring(e);
+            if (mantissa.indexOf('.') >= 0) {
+                mantissa = mantissa.replaceAll("0+$", "");
+                if (mantissa.endsWith(".")) mantissa = mantissa.substring(0, mantissa.length() - 1);
+            }
+            body = mantissa + tail;
+        }
+        return body;
+    }
+
+    static String formatFloat(double value, FormatSpec spec) {
+        char type = spec.type;
+        boolean negative = (Double.doubleToRawLongBits(value) & Long.MIN_VALUE) != 0;
+        double magnitude = Math.abs(value);
+        boolean upper = type == 'F' || type == 'E' || type == 'G';
+        String body;
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            body = Double.isNaN(value) ? "nan" : "inf";
+            if (Double.isNaN(value)) negative = false;
+            if (type == '%') body += "%";
+        } else if (type == 'f' || type == 'F') {
+            body = fixed(magnitude, spec.precision < 0 ? 6 : spec.precision);
+            if (spec.alt && body.indexOf('.') < 0) body += ".";
+        } else if (type == 'e' || type == 'E') {
+            body = exponent(magnitude, spec.precision < 0 ? 6 : spec.precision, spec.alt);
+        } else if (type == 'g' || type == 'G') {
+            body = general(magnitude, spec.precision < 0 ? 6 : spec.precision, spec.alt);
+        } else if (type == '%') {
+            body = fixed(magnitude * 100.0, spec.precision < 0 ? 6 : spec.precision) + "%";
+        } else if (type == 0 || type == 'n') {
+            if (spec.precision < 0) {
+                body = str(magnitude);
+            } else {
+                body = general(magnitude, spec.precision, false);
+                if (body.indexOf('.') < 0 && body.indexOf('e') < 0) body += ".0";
+            }
+        } else {
+            throw new IllegalArgumentException("Unknown format code '" + type + "' for object of type 'float'");
+        }
+        if (upper) body = body.toUpperCase();
+        if (spec.group != 0) {
+            int end = 0;
+            while (end < body.length() && Character.isDigit(body.charAt(end))) end++;
+            body = groupDigits(body.substring(0, end), spec.group, 3) + body.substring(end);
+        }
+        return pad(signOf(negative, spec), body, spec, true);
+    }
+
+    static String formatStr(String value, FormatSpec spec) {
+        if (spec.type != 0 && spec.type != 's') {
+            throw new IllegalArgumentException("Unknown format code '" + spec.type + "' for object of type 'str'");
+        }
+        if (spec.sign != '-') throw new IllegalArgumentException("Sign not allowed in string format specifier");
+        if (spec.align == '=') throw new IllegalArgumentException("'=' alignment not allowed in string format specifier");
+        String body = value;
+        if (spec.precision >= 0 && body.codePointCount(0, body.length()) > spec.precision) {
+            body = body.substring(0, body.offsetByCodePoints(0, spec.precision));
+        }
+        return pad("", body, spec, false);
+    }
+
     /** round(x, n): halves go to the even neighbour, as in Python. */
     public static double round(double value, long digits) {
-        java.math.BigDecimal exact = new java.math.BigDecimal(Double.toString(value));
-        return exact.setScale((int) digits, java.math.RoundingMode.HALF_EVEN).doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value) || digits > 323) return value;
+        // The exact binary value, as Python rounds it: round(2.675, 2) is 2.67
+        // because 2.675 is stored as 2.67499999...
+        java.math.BigDecimal exact = new java.math.BigDecimal(value);
+        double rounded = exact.setScale((int) digits, java.math.RoundingMode.HALF_EVEN).doubleValue();
+        return rounded == 0.0 && (value < 0 || 1 / value < 0) ? -0.0 : rounded;
     }
 
     public static long toInt(String text) {
@@ -310,9 +553,11 @@ public final class Py {
 
     // ------------------------------------------------------------ sequences
 
-    private static int position(long index, int size) {
+    private static int position(long index, int size) { return position(index, size, "list"); }
+
+    private static int position(long index, int size, String what) {
         long at = index < 0 ? index + size : index;
-        if (at < 0 || at >= size) throw new IndexOutOfBoundsException("index out of range");
+        if (at < 0 || at >= size) throw new IndexOutOfBoundsException(what + " index out of range");
         return (int) at;
     }
 
@@ -324,7 +569,7 @@ public final class Py {
     }
 
     public static String charAt(String text, long index) {
-        return String.valueOf(text.charAt(position(index, text.length())));
+        return String.valueOf(text.charAt(position(index, text.length(), "string")));
     }
 
     public static <K, V> V getKey(Map<K, V> entries, K key) {
@@ -505,6 +750,25 @@ public final class Py {
 
     // ------------------------------------------------------- dict methods
 
+    /** zip(a, b): pairs of the items at each position, stopping at the shortest. */
+    public static <A, B> List<Tuple2<A, B>> zip(List<A> a, List<B> b) {
+        int n = Math.min(a.size(), b.size());
+        List<Tuple2<A, B>> out = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) out.add(new Tuple2<>(a.get(i), b.get(i)));
+        return out;
+    }
+
+    public static <A, B, C> List<Tuple3<A, B, C>> zip(List<A> a, List<B> b, List<C> c) {
+        int n = Math.min(a.size(), Math.min(b.size(), c.size()));
+        List<Tuple3<A, B, C>> out = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) out.add(new Tuple3<>(a.get(i), b.get(i), c.get(i)));
+        return out;
+    }
+
+    public static List<Tuple2<String, String>> zip(String a, String b) {
+        return zip(chars(a), chars(b));
+    }
+
     public static <K, V> List<Tuple2<K, V>> items(Map<K, V> entries) {
         List<Tuple2<K, V>> out = new ArrayList<>(entries.size());
         for (Map.Entry<K, V> entry : entries.entrySet()) out.add(new Tuple2<>(entry.getKey(), entry.getValue()));
@@ -610,13 +874,49 @@ public final class Py {
     public static void runMain(Runnable body) {
         try {
             body.run();
-        } catch (RuntimeException | AssertionError error) {
+        } catch (RuntimeException | AssertionError | StackOverflowError error) {
             System.out.flush();
             System.err.println("Traceback (most recent call last):");
-            System.err.println(error.getClass().getSimpleName() + ": " + str(error));
+            System.err.println(pythonName(error) + ": " + pythonMessage(error));
             System.exit(1);
         }
     }
+
+    /** The Python exception a Java runtime exception stands for. */
+    static String pythonName(Throwable error) {
+        if (error instanceof ArithmeticException) {
+            return String.valueOf(error.getMessage()).contains("overflow") ? "OverflowError" : "ZeroDivisionError";
+        }
+        if (error instanceof IndexOutOfBoundsException) return "IndexError";
+        if (error instanceof NoSuchElementException) return "KeyError";
+        if (error instanceof ClassCastException) return "TypeError";
+        if (error instanceof NullPointerException) return "AttributeError";
+        if (error instanceof StackOverflowError) return "RecursionError";
+        if (error instanceof UnsupportedOperationException) return "NotImplementedError";
+        if (error instanceof AssertionError) return "AssertionError";
+        if (error.getClass() == IllegalArgumentException.class || error instanceof NumberFormatException) return "ValueError";
+        return error.getClass().getSimpleName();
+    }
+
+    static String pythonMessage(Throwable error) {
+        if (error instanceof ArithmeticException) {
+            return String.valueOf(error.getMessage()).contains("overflow")
+                ? "integer result does not fit in 64 bits (Python ints are unbounded)"
+                : "integer division or modulo by zero";
+        }
+        if (error instanceof StackOverflowError) return "maximum recursion depth exceeded";
+        if (error instanceof NullPointerException) return "'NoneType' object has no attribute";
+        return str(error);
+    }
+
+    // ---------------------------------------------------------- int arithmetic
+    // Python's int never overflows; long does, and wrapping silently would
+    // print a wrong answer. These throw instead (an intrinsic overflow check).
+    // The long-only signatures stop javac picking Math.addExact(int, int).
+
+    public static long add(long a, long b) { return Math.addExact(a, b); }
+    public static long sub(long a, long b) { return Math.subtractExact(a, b); }
+    public static long mul(long a, long b) { return Math.multiplyExact(a, b); }
 
     // ------------------------------------------------------------ factories
     // Mutable, insertion-ordered collections, accepting null elements.

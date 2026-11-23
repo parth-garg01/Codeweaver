@@ -39,7 +39,7 @@ from codeweaver.backends.cpp.context import CppContext
 from codeweaver.backends.cpp.naming import safe_identifier
 from codeweaver.backends.cpp.types import is_value_optional, render_type
 from codeweaver.graph.project_index import BUILTIN_EXCEPTIONS, ClassInfo, ScopeKind
-from codeweaver.ir.base import CONSTRUCTS_CLASS, IRNode, IRUnsupported
+from codeweaver.ir.base import CONSTRUCTS_CLASS, IRNode, IRUnsupported, walk
 from codeweaver.ir.declarations import IRFunction
 from codeweaver.ir.expressions import (
     IRArrayLiteral,
@@ -73,7 +73,6 @@ __all__ = ["condition", "emit_expression", "is_super_call", "lower_arguments"]
 #: Python builtins that have no faithful C++ mapping in this build.
 UNMAPPED_BUILTINS: dict[str, str] = {
     "enumerate": "iterate with an index loop",
-    "zip": "index both sequences explicitly",
     "map": "use a comprehension",
     "filter": "use a comprehension with a condition",
     "reversed": "copy and reverse the sequence explicitly",
@@ -93,7 +92,6 @@ UNMAPPED_BUILTINS: dict[str, str] = {
     "hash": "use std::hash explicitly",
     "open": "file I/O is not translated; use <fstream>",
     "input": "console input is not translated; use std::getline",
-    "format": "use an f-string",
 }
 
 #: Builtin-type methods the runtime implements as cw::<name>(receiver, ...).
@@ -315,6 +313,14 @@ def _literal(node: IRLiteral, ctx: CppContext, expected: IRType | None) -> Emitt
         text = _float_literal(value)
         return Emitted(text, UNARY if text.startswith("-") else PRIMARY)
     if isinstance(value, str):
+        if not value.isascii():
+            ctx.warn(
+                "CW0682",
+                "non-ASCII string: C++ strings are UTF-8 bytes, so len(), indexing "
+                "and slicing count bytes where Python counts characters",
+                span=node.span,
+                hint="results match Python exactly for ASCII text",
+            )
         return Emitted(f"{c_string_literal(value)}s")
     if isinstance(value, bytes):
         return Emitted("std::vector<std::uint8_t>{" + ", ".join(str(byte) for byte in value) + "}")
@@ -415,10 +421,27 @@ def _binary(node: IRBinary, ctx: CppContext, expected: IRType | None) -> Emitted
             return Emitted(f"cw::repeat({left.text}, {right.text})", POSTFIX)
         if _is(right_type, "str") or _is(right_type, "list"):
             return Emitted(f"cw::repeat({right.text}, {left.text})", POSTFIX)
+    checked = CHECKED_INT_OPS.get(op)
+    if checked is not None and is_int_arithmetic(left_type, right_type):
+        return Emitted(f"{checked}({left.text}, {right.text})", POSTFIX)
     spelling, precedence = BINARY_SPELLING[op]
     return Emitted(
         f"{left.at_least(precedence)} {spelling} {right.at_least(precedence + 1)}", precedence
     )
+
+
+#: int operators whose 64-bit result can overflow where Python's cannot.
+CHECKED_INT_OPS: dict[BinaryOp, str] = {
+    BinaryOp.ADD: "cw::checked_add",
+    BinaryOp.SUB: "cw::checked_sub",
+    BinaryOp.MUL: "cw::checked_mul",
+}
+
+
+def is_int_arithmetic(left: IRType | None, right: IRType | None) -> bool:
+    """Both operands are ints (or bools, which Python adds as ints)."""
+    kinds = (_is(left, "int") or _is(left, "bool"), _is(right, "int") or _is(right, "bool"))
+    return all(kinds) and (_is(left, "int") or _is(right, "int"))
 
 
 def _unary(node: IRUnary, ctx: CppContext, expected: IRType | None) -> Emitted:
@@ -1143,11 +1166,17 @@ def _builtin(name: str, node: IRCall, ctx: CppContext, expected: IRType | None) 
                 "print() keyword arguments (sep, end, file) are not translated",
                 span=node.span,
             )
+        if len(args) > 1 and any(
+            isinstance(inner, IRCall) for item in args for inner in walk(item)
+        ):
+            return Emitted(f"cw::print_ordered{{{joined}}}", POSTFIX)
         return call("cw::print")
     simple: dict[str, str] = {
         "len": "cw::len",
         "str": "cw::str",
         "repr": "cw::repr",
+        "format": "cw::format",
+        "zip": "cw::zip",
         "abs": "cw::abs",
         "ord": "cw::ord",
         "chr": "cw::chr",

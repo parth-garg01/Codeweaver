@@ -21,6 +21,7 @@ from codeweaver.backends.common.clike import POSTFIX
 from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.java.context import JavaContext, LoopFrame
 from codeweaver.backends.java.expressions import (
+    CHECKED_INT_OPS,
     condition,
     emit_expression,
     emit_store,
@@ -234,7 +235,15 @@ def _aug_assign(node: IRAugAssign, writer: CodeWriter, ctx: JavaContext) -> None
             )
             return
     simple = _AUG_SPELLING.get(node.op)
-    if isinstance(target, IRIndex) or simple is None:
+    value_type = getattr(node.value, "value_type", None)
+    checked = (
+        node.op in CHECKED_INT_OPS
+        and target_type is not None
+        and target_type.name == "int"
+        and value_type is not None
+        and value_type.name == "int"
+    )
+    if isinstance(target, IRIndex) or simple is None or checked:
         if node.op is BinaryOp.DIV and target_type is not None and target_type.name == "int":
             ctx.warn(
                 "CW0690",

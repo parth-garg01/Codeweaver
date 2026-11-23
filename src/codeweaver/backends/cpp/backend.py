@@ -7,7 +7,7 @@ The generated project is a CMake project:
 * every module with an ``if __name__ == "__main__":`` block gets its own
   ``<module>.main.cpp`` and an executable target;
 * the build defaults to ``Release`` (``-O3``), and ``-DCODEWEAVER_UNCHECKED=ON``
-  removes bounds checks from indexing for maximum speed.
+  removes bounds and int overflow checks for maximum speed.
 """
 
 from __future__ import annotations
@@ -56,8 +56,13 @@ def render_cmakelists(project_name: str, layout: CppLayout) -> str:
         "if(NOT CMAKE_BUILD_TYPE)",
         "  set(CMAKE_BUILD_TYPE Release)",
         "endif()",
+        "# Python never fuses a multiply and an add; FMA contraction would change",
+        "# floating-point results in the last bits.",
+        'if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")',
+        "  add_compile_options(-ffp-contract=off)",
+        "endif()",
         "",
-        'option(CODEWEAVER_UNCHECKED "Skip bounds checks on indexing (faster, no IndexError)" OFF)',
+        'option(CODEWEAVER_UNCHECKED "Skip index and int overflow checks (faster; no IndexError/OverflowError)" OFF)',
         "",
         f"add_library({target}_lib STATIC",
         *(f"  {source}" for source in sources),

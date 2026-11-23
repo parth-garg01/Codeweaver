@@ -19,7 +19,7 @@ def module_class(source: str) -> str:
 class ArithmeticTests(unittest.TestCase):
     def test_floor_division_and_modulo_round_like_python(self) -> None:
         out = module_class("def f(a: int, b: int) -> int:\n    return a // b + a % b\n")
-        self.assertIn("Math.floorDiv(a, b) + Math.floorMod(a, b)", out)
+        self.assertIn("Py.add(Math.floorDiv(a, b), Math.floorMod(a, b))", out)
 
     def test_true_division_always_produces_a_double(self) -> None:
         self.assertIn(

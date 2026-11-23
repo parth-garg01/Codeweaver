@@ -148,5 +148,90 @@ class CSubsetEquivalenceTests(unittest.TestCase):
         self.check("java")
 
 
+STRESS_PROJECT = FIXTURES / "stress_project"
+C_STRESS_PROJECT = FIXTURES / "c_stress_project"
+
+
+class StressEquivalenceTests(unittest.TestCase):
+    """Programs written to break the backends, each fixed bug kept as a check.
+
+    They cover annotated fields, polymorphism and aliasing, f-string format
+    specifications, generator arguments, enumerate/zip and nested unpacking
+    in loops, exceptions, round(), float accumulation (no FMA contraction),
+    argument evaluation order and Java lambda scoping.
+    """
+
+    def check(self, project: Path, target: str) -> None:
+        expected = python_output(project, "app.main")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            outcome = run_migration(project, out, MigrationOptions(target=target))
+            # The formatting module has non-ASCII text, which C and C++ warn about.
+            self.assertIn(
+                outcome.report.status.value,
+                ("passed", "passed with warnings"),
+                outcome.report.to_dict(),
+            )
+            self.assertEqual(outcome.report.unsupported_total, 0)
+            completed = run(BUILDERS[target](out), out)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout, expected)
+
+    def test_cpp_matches_python(self) -> None:
+        self.check(STRESS_PROJECT, "cpp")
+
+    def test_java_matches_python(self) -> None:
+        self.check(STRESS_PROJECT, "java")
+
+    def test_c_subset_matches_python_in_c(self) -> None:
+        self.check(C_STRESS_PROJECT, "c")
+
+    def test_c_subset_matches_python_in_cpp(self) -> None:
+        self.check(C_STRESS_PROJECT, "cpp")
+
+    def test_c_subset_matches_python_in_java(self) -> None:
+        self.check(C_STRESS_PROJECT, "java")
+
+
+_OVERFLOW_SOURCE = """def fact(n: int) -> int:
+    r = 1
+    for i in range(2, n + 1):
+        r *= i
+    return r
+
+
+if __name__ == "__main__":
+    print(fact(20))
+    print(fact(25))
+"""
+
+
+class IntOverflowTests(unittest.TestCase):
+    """Python's int is unbounded; a 64-bit result that does not fit must
+    raise OverflowError, never print a wrapped value."""
+
+    def check(self, target: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            (project / "app").mkdir(parents=True)
+            (project / "app" / "__init__.py").write_text("")
+            (project / "app" / "main.py").write_text(_OVERFLOW_SOURCE)
+            out = Path(tmp) / "out"
+            run_migration(project, out, MigrationOptions(target=target, run_validation=False))
+            completed = run(BUILDERS[target](out), out)
+            self.assertEqual(completed.stdout, "2432902008176640000\n")
+            self.assertEqual(completed.returncode, 1)
+            self.assertIn("OverflowError", completed.stderr)
+
+    def test_c_raises(self) -> None:
+        self.check("c")
+
+    def test_cpp_raises(self) -> None:
+        self.check("cpp")
+
+    def test_java_raises(self) -> None:
+        self.check("java")
+
+
 if __name__ == "__main__":
     unittest.main()

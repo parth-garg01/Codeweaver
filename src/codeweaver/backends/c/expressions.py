@@ -312,6 +312,14 @@ def _literal(node: IRLiteral, ctx: CContext, expected: IRType | None) -> Emitted
             text += ".0"
         return Emitted(text, UNARY if text.startswith("-") else PRIMARY)
     if isinstance(value, str):
+        if not value.isascii():
+            ctx.warn(
+                "CW0682",
+                "non-ASCII string: C strings are UTF-8 bytes, so len(), indexing "
+                "and slicing count bytes where Python counts characters",
+                span=node.span,
+                hint="results match Python exactly for ASCII text",
+            )
         return Emitted(c_string_literal(value, trigraphs=True))
     return _unsupported(
         ctx, "Constant", f"literal of type {type(value).__name__} has no C spelling", node
@@ -348,6 +356,14 @@ def _name(node: IRName, ctx: CContext, expected: IRType | None) -> Emitted:
 
 
 # ----------------------------------------------------------------- operators
+
+
+#: int operators whose 64-bit result can overflow where Python's cannot.
+CHECKED_INT_OPS: dict[BinaryOp, str] = {
+    BinaryOp.ADD: "cw_add_i64",
+    BinaryOp.SUB: "cw_sub_i64",
+    BinaryOp.MUL: "cw_mul_i64",
+}
 
 
 def _binary(node: IRBinary, ctx: CContext, expected: IRType | None) -> Emitted:
@@ -389,6 +405,9 @@ def _binary(node: IRBinary, ctx: CContext, expected: IRType | None) -> Emitted:
             kind = _kind(sequence_type, ctx)
             if kind:
                 return Emitted(f"cw_list_{kind}_repeat({sequence.text}, {count.text})", POSTFIX)
+    if both_int and op in CHECKED_INT_OPS:
+        # int64_t overflows where Python's int cannot: raise instead of wrapping.
+        return Emitted(f"{CHECKED_INT_OPS[op]}({left.text}, {right.text})", POSTFIX)
     spelling, precedence = BINARY_SPELLING[op]
     return Emitted(
         f"{left.at_least(precedence)} {spelling} {right.at_least(precedence + 1)}", precedence
@@ -615,9 +634,12 @@ def emit_store(target_node: IRNode, value: str, ctx: CContext) -> str:
 
 
 def _slice(node: IRSlice, ctx: CContext, expected: IRType | None) -> Emitted:
-    kind = _kind(_type(node.target), ctx)
+    is_str = _is(_type(node.target), "str")
+    kind = "str_" if is_str else _kind(_type(node.target), ctx)
     if kind is None:
-        return _unsupported(ctx, "Subscript", "slicing is only translated for lists", node)
+        return _unsupported(
+            ctx, "Subscript", "slicing is only translated for lists and strings", node
+        )
     parts = [emit_expression(node.target, ctx).text]
     for bound in (node.lower, node.upper):
         if bound is None:
@@ -625,7 +647,8 @@ def _slice(node: IRSlice, ctx: CContext, expected: IRType | None) -> Emitted:
         else:
             parts += ["true", emit_expression(bound, ctx).text]
     parts.append(emit_expression(node.step, ctx).text if node.step is not None else "1")
-    return Emitted(f"cw_list_{kind}_slice({', '.join(parts)})", POSTFIX)
+    function = "cw_str_slice" if is_str else f"cw_list_{kind}_slice"
+    return Emitted(f"{function}({', '.join(parts)})", POSTFIX)
 
 
 # --------------------------------------------------------------- containers
@@ -698,9 +721,16 @@ def _comprehension(node: IRComprehension, ctx: CContext, expected: IRType | None
     ctx.locals = saved
     ctx.pre = outer
     append = f"cw_list_{kind}_append({result}, {element});"
+    used = any(
+        isinstance(item, IRName) and item.name == node.target
+        for part in (node.element, node.condition)
+        if part is not None
+        for item in walk(part)
+    )
     body = " ".join(
         [
             f"{binding.format(variable=variable)}",
+            *([] if used else [f"(void){variable};"]),
             *inner,
             f"if ({test}) {append}" if test else append,
         ]
@@ -923,6 +953,7 @@ def _builtin_method(node: IRCall, callee: IRAttribute, ctx: CContext) -> Emitted
             "find": 1,
             "replace": 2,
             "split": 1,
+            "count": 1,
         }
         if name in simple and len(args) == simple[name]:
             return Emitted(f"cw_str_{name}({', '.join([receiver, *args])})", POSTFIX)
@@ -997,6 +1028,12 @@ def _builtin(name: str, node: IRCall, ctx: CContext, expected: IRType | None) ->
     if name == "print":
         if keywords:
             ctx.warn("CW0687", "print() keyword arguments are not translated", span=node.span)
+        # C leaves the order of argument evaluation unspecified, but Python
+        # evaluates left to right: when an argument has a call that could
+        # change what another one reads, each part is bound in order first.
+        ordered = len(args) > 1 and any(
+            isinstance(inner, IRCall) for item in args for inner in walk(item)
+        )
         parts = []
         for item in args:
             converted = string_of(item, ctx)
@@ -1004,6 +1041,10 @@ def _builtin(name: str, node: IRCall, ctx: CContext, expected: IRType | None) ->
                 return _unsupported(
                     ctx, "Call", "print() of a value whose type has no C formatting", item
                 )
+            if ordered:
+                bound = ctx.temp("p")
+                ctx.pre.append(f"cw_str {bound} = {converted};")
+                converted = bound
             parts.append(converted)
         return Emitted(f"cw_print({', '.join([str(len(parts)), *parts])})", POSTFIX)
     if name == "len" and len(args) == 1:
@@ -1024,6 +1065,28 @@ def _builtin(name: str, node: IRCall, ctx: CContext, expected: IRType | None) ->
                 ctx, "Call", f"{name}() of a value whose type has no C formatting", node
             )
         return Emitted(converted, POSTFIX)
+    if name == "format" and len(args) in (1, 2):
+        spec = rendered[1] if len(args) == 2 else '""'
+        if len(args) == 2 and not _is(types[1], "str"):
+            return _unsupported(ctx, "Call", "format() with a non-string specification", node)
+        suffix = next(
+            (
+                kind
+                for kind, test in (
+                    ("bool", lambda t: _is(t, "bool")),
+                    ("i64", lambda t: _is(t, "int")),
+                    ("f64", lambda t: _is(t, "float")),
+                    ("str", lambda t: _is(t, "str")),
+                )
+                if test(types[0])
+            ),
+            None,
+        )
+        if suffix is None:
+            return _unsupported(
+                ctx, "Call", "format() of a value whose type has no C formatting", node
+            )
+        return Emitted(f"cw_format_{suffix}({rendered[0]}, {spec})", POSTFIX)
     if name == "int" and len(args) == 1:
         if _is(types[0], "str"):
             return Emitted(f"cw_int_from_str({rendered[0]})", POSTFIX)
@@ -1046,10 +1109,12 @@ def _builtin(name: str, node: IRCall, ctx: CContext, expected: IRType | None) ->
     if name in ("min", "max"):
         if len(args) == 1 and _kind(types[0], ctx) in ("i64", "f64"):
             return Emitted(f"cw_list_{_kind(types[0], ctx)}_{name}({rendered[0]})", POSTFIX)
-        if len(args) == 2:
-            if all(_is_int(item) for item in types):
-                return Emitted(f"cw_{name}_i64({rendered[0]}, {rendered[1]})", POSTFIX)
-            return Emitted(f"f{name}({rendered[0]}, {rendered[1]})", POSTFIX)
+        if len(args) >= 2 and all(_is_int(item) or _is(item, "float") for item in types):
+            function = f"cw_{name}_i64" if all(_is_int(item) for item in types) else f"f{name}"
+            folded = rendered[0]
+            for part in rendered[1:]:
+                folded = f"{function}({folded}, {part})"
+            return Emitted(folded, POSTFIX)
     if name == "sum" and len(args) == 1 and _kind(types[0], ctx) in ("i64", "f64"):
         return Emitted(f"cw_list_{_kind(types[0], ctx)}_sum({rendered[0]})", POSTFIX)
     if (
@@ -1077,6 +1142,8 @@ def _builtin(name: str, node: IRCall, ctx: CContext, expected: IRType | None) ->
             else (["0", rendered[0], "1"] if len(rendered) == 1 else [*rendered, "1"])
         )
         return Emitted(f"cw_range({', '.join(bounds)})", POSTFIX)
+    if name == "chr" and len(args) == 1 and _is_int(types[0]):
+        return Emitted(f"cw_chr({rendered[0]})", POSTFIX)
     if name == "ord" and len(args) == 1:
         return Emitted(
             f"(int64_t)(unsigned char)({emit_expression(args[0], ctx).at_least(POSTFIX)}[0])", UNARY

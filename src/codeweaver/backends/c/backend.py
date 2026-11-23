@@ -6,7 +6,8 @@ The generated project is a CMake project laid out like the C++ one:
   header-only runtime ``src/cw_runtime/cw.h``;
 * every module with an ``if __name__ == "__main__":`` block gets its own
   ``<module>.main.c`` and an executable target;
-* the build defaults to ``Release`` (``-O3``).
+* the build defaults to ``Release`` (``-O3``); int arithmetic is overflow
+  checked, and ``-DCODEWEAVER_UNCHECKED=ON`` drops the checks for speed.
 
 C is the narrowest target: values are ints, floats, bools, strings, lists and
 project objects.  dict, set and tuple values, exception handling and
@@ -59,11 +60,21 @@ def render_cmakelists(project_name: str, layout: CLayout) -> str:
         "if(NOT CMAKE_BUILD_TYPE)",
         "  set(CMAKE_BUILD_TYPE Release)",
         "endif()",
+        "# Python never fuses a multiply and an add; FMA contraction would change",
+        "# floating-point results in the last bits.",
+        'if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")',
+        "  add_compile_options(-ffp-contract=off)",
+        "endif()",
+        "",
+        'option(CODEWEAVER_UNCHECKED "Skip int overflow checks (faster; wraps instead of OverflowError)" OFF)',
         "",
         f"add_library({target}_lib STATIC",
         *(f"  {source}" for source in sources),
         ")",
         f"target_include_directories({target}_lib PUBLIC {SOURCE_ROOT})",
+        "if(CODEWEAVER_UNCHECKED)",
+        f"  target_compile_definitions({target}_lib PUBLIC CW_UNCHECKED)",
+        "endif()",
         "find_library(MATH_LIBRARY m)",
         "if(MATH_LIBRARY)",
         f"  target_link_libraries({target}_lib PUBLIC ${{MATH_LIBRARY}})",

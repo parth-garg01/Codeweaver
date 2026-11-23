@@ -16,7 +16,13 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from codeweaver.backends.c.context import CContext, LoopFrame
-from codeweaver.backends.c.expressions import condition, emit_expression, emit_store, string_of
+from codeweaver.backends.c.expressions import (
+    CHECKED_INT_OPS,
+    condition,
+    emit_expression,
+    emit_store,
+    string_of,
+)
 from codeweaver.backends.c.naming import safe_identifier
 from codeweaver.backends.c.types import list_kind, render_type, zero_value
 from codeweaver.backends.common.analysis import unchecked_index_loops
@@ -202,6 +208,9 @@ def _aug_assign(node: IRAugAssign, writer: CodeWriter, ctx: CContext) -> None:
         BinaryOp.MOD: "cw_mod_i64" if both_int else "cw_mod_f64",
         BinaryOp.POW: "cw_pow_i64" if both_int else "pow",
     }.get(node.op)
+    value_type = getattr(node.value, "value_type", None)
+    if both_int and value_type is not None and value_type.name in ("int", "bool"):
+        runtime = CHECKED_INT_OPS.get(node.op, runtime)
     if is_str and node.op is BinaryOp.ADD:
         runtime = "cw_str_concat"
     if node.op is BinaryOp.DIV and both_int:
