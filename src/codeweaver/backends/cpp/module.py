@@ -166,6 +166,7 @@ def generate_module_files(
             mappings=header.mapping_dict(),
             diagnostics=ctx.diagnostics,
             unsupported_count=len(ctx.gaps),
+            gaps=list(ctx.gaps),
         ),
         GeneratedFile(
             path=f"{SOURCE_ROOT}/{layout.source(module.name)}",

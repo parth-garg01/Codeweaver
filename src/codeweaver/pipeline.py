@@ -32,16 +32,20 @@ from codeweaver.errors import CodeWeaverError, UnsupportedPairError
 from codeweaver.graph import DependencyGraph, build_dependency_graph, build_symbol_index
 from codeweaver.graph.project_index import ProjectIndex
 from codeweaver.ir import IR_SCHEMA_VERSION
+from codeweaver.ir.base import IRUnsupported
 from codeweaver.ir.declarations import IRModule
 from codeweaver.ir.schema import validate_module
 from codeweaver.language_registry import registry
 from codeweaver.planner import MigrationPlan, build_plan
+from codeweaver.planner.plan import group_unsupported
 from codeweaver.project_intake.manifests import Manifest, detect_manifests
 from codeweaver.project_intake.paths import normalise_root
 from codeweaver.project_intake.scanner import ScanOptions, ScanResult, scan_project
 from codeweaver.reporting import FileCounts, MigrationReport
+from codeweaver.reporting.report import UnsupportedEntry
 from codeweaver.transforms import default_pipeline, project_pipeline
 from codeweaver.transforms.construction import ClassConstructionPass
+from codeweaver.transforms.inference import inference_order
 from codeweaver.transforms.inheritance import collect_inherited_fields
 from codeweaver.validation import ExecutionPolicy, detect_toolchains, validate_project
 
@@ -292,12 +296,13 @@ def run_migration(
     index = (
         ProjectIndex.build(transformed) if getattr(backend, "uses_type_inference", False) else None
     )
-    second: list[IRModule] = []
-    for module in transformed:
+    # Imported modules first, so inferred module-variable types reach importers.
+    finished: dict[str, IRModule] = {}
+    for module in inference_order(transformed):
         result = project_pipeline(options.target, index).run(module, analysis.diagnostics)
-        second.append(result.module)
+        finished[module.name] = result.module
         _merge_pass_names(result, applied, skipped)
-    transformed = second
+    transformed = [finished[module.name] for module in transformed]
     if index is not None:
         # Backends resolve names against the final, fully typed IR.
         index = ProjectIndex.build(transformed)
@@ -306,6 +311,7 @@ def run_migration(
     skipped = [name for name in skipped if name not in applied]
 
     written: list[str] = []
+    backend_gaps: list[IRUnsupported] = []
     translated = 0
     cancelled = False
     mappings: dict[str, list[dict[str, Any]]] = {}
@@ -327,6 +333,7 @@ def run_migration(
         for generated in backend.generate_files(module, layout, diagnostics=analysis.diagnostics):
             _write(output, generated.path, generated.contents)
             written.append(generated.path)
+            backend_gaps.extend(generated.gaps)
             if generated.mappings:
                 mappings[generated.path] = generated.mappings
         translated += 1
@@ -352,9 +359,33 @@ def run_migration(
         cancelled=cancelled,
         translated=translated,
     )
+    report.unsupported = merge_backend_gaps(report.unsupported, backend_gaps)
     return MigrationOutcome(
         report=report, analysis=analysis, plan=plan, written_files=written, cancelled=cancelled
     )
+
+
+def merge_backend_gaps(
+    planned: list[UnsupportedEntry], backend_gaps: list[IRUnsupported]
+) -> list[UnsupportedEntry]:
+    """Add the constructs only the target backend could not express.
+
+    The plan counts what the frontend could not represent.  A backend also
+    meets IR it has no spelling for (a ``dict`` in C, say), and those gaps make
+    the migration just as incomplete.  A frontend gap the backend passed
+    through is already in the plan and is not counted twice.
+    """
+    known = {location for entry in planned for location in entry.locations}
+    seen: set[tuple[str, str, str]] = set()
+    extra: list[IRUnsupported] = []
+    for gap in backend_gaps:
+        location = str(gap.span) if gap.span else ""
+        key = (gap.source_kind, gap.reason, location)
+        if (location and location in known) or key in seen:
+            continue
+        seen.add(key)
+        extra.append(gap)
+    return [*planned, *group_unsupported(extra)] if extra else planned
 
 
 def _merge_pass_names(result: Any, applied: list[str], skipped: list[str]) -> None:

@@ -134,6 +134,7 @@ def generate_module(
         mappings=writer.mapping_dict(),
         diagnostics=ctx.diagnostics,
         unsupported_count=len(ctx.gaps),
+        gaps=list(ctx.gaps),
     )
 
 

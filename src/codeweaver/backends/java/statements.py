@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from codeweaver.backends.common.analysis import unchecked_index_loops
+from codeweaver.backends.common.analysis import can_complete, unchecked_index_loops
 from codeweaver.backends.common.clike import POSTFIX
 from codeweaver.backends.common.writer import CodeWriter
 from codeweaver.backends.java.context import JavaContext, LoopFrame
@@ -93,54 +93,6 @@ _CATCH_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "Exception": ("RuntimeException", "AssertionError"),
     "LookupError": ("IndexOutOfBoundsException", "NoSuchElementException", "Py.LookupError"),
 }
-
-
-# --------------------------------------------------------------- reachability
-
-
-def _breaks_out(body: IRBlock) -> bool:
-    """A ``break`` in *body* that targets the enclosing loop (not a nested one)."""
-
-    def visit(node: IRNode) -> bool:
-        if isinstance(node, IRBreak):
-            return True
-        if isinstance(node, IRWhile | IRForEach | IRForRange):
-            return False
-        return any(visit(child) for child in node.children())
-
-    return visit(body)
-
-
-def can_complete(node: IRNode | None) -> bool:
-    """Whether Java considers that *node* can complete normally (JLS 14.22)."""
-    if node is None:
-        return True
-    if isinstance(node, IRReturn | IRThrow | IRBreak | IRContinue):
-        return False
-    if isinstance(node, IRBlock):
-        return all(can_complete(statement) for statement in node.statements)
-    if isinstance(node, IRIf):
-        if node.else_body is None:
-            return True
-        return can_complete(node.then_body) or can_complete(node.else_body)
-    if isinstance(node, IRWhile):
-        test = node.test
-        if isinstance(test, IRLiteral) and test.value is True:
-            return _breaks_out(node.body)
-        return True
-    if isinstance(node, IRTry):
-        if (
-            node.finally_body is not None
-            and not node.finally_body.is_empty
-            and not can_complete(node.finally_body)
-        ):
-            return False
-        # The else body is emitted inside `if (completed) { ... }`, which Java
-        # always considers able to complete; mirror the generated shape.
-        return can_complete(node.body) or any(
-            can_complete(handler.body) for handler in node.handlers
-        )
-    return True
 
 
 # ------------------------------------------------------------------- driver

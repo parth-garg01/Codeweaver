@@ -133,11 +133,16 @@ class MigrationPlan:
 
 def collect_unsupported(modules: list[IRModule]) -> list[UnsupportedEntry]:
     """Group every unsupported node across *modules* by construct."""
+    return group_unsupported(
+        [node for module in modules for node in walk(module) if isinstance(node, IRUnsupported)]
+    )
+
+
+def group_unsupported(nodes_found: list[IRUnsupported]) -> list[UnsupportedEntry]:
+    """Group unsupported constructs by kind, most common reason first."""
     by_kind: dict[str, list[IRUnsupported]] = {}
-    for module in modules:
-        for node in walk(module):
-            if isinstance(node, IRUnsupported):
-                by_kind.setdefault(node.source_kind, []).append(node)
+    for node in nodes_found:
+        by_kind.setdefault(node.source_kind, []).append(node)
     entries: list[UnsupportedEntry] = []
     for kind in sorted(by_kind):
         nodes = by_kind[kind]

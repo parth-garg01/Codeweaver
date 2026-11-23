@@ -771,7 +771,9 @@ def _comprehension(node: IRComprehension, ctx: CppContext, expected: IRType | No
     )
     predicate = condition(node.condition, ctx) if node.condition is not None else ""
     ctx.locals = saved
-    lam = f"[&](const auto& {variable})"
+    # A lambda at namespace scope (a module variable) may not capture.
+    capture = "&" if ctx.function is not None else ""
+    lam = f"[{capture}](const auto& {variable})"
     if node.form == "dict":
         name = "cw::dict_comprehend_if" if predicate else "cw::dict_comprehend"
         pieces = [iterable]

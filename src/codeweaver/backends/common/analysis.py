@@ -26,6 +26,7 @@ from codeweaver.ir.expressions import (
     IRAttribute,
     IRCall,
     IRCompare,
+    IRComprehension,
     IRIndex,
     IRLiteral,
     IRName,
@@ -35,16 +36,25 @@ from codeweaver.ir.operators import CompareOp
 from codeweaver.ir.statements import (
     IRAssign,
     IRAugAssign,
+    IRBlock,
+    IRBreak,
+    IRContinue,
     IRDelete,
     IRForEach,
     IRForRange,
     IRIf,
+    IRReturn,
+    IRThrow,
+    IRTry,
     IRVarDecl,
+    IRWhile,
 )
 
 __all__ = [
     "MUTATING_METHODS",
     "ParamMutability",
+    "can_complete",
+    "escaping_loop_variables",
     "is_main_guard",
     "local_names",
     "rebound_names",
@@ -169,6 +179,12 @@ def escaping_loop_variables(body: IRNode) -> set[str]:
         inside: set[int] = set()
         for loop in binders:
             inside.update(id(item) for item in walk(loop))
+        # A comprehension binding the same name has its own scope in Python 3.
+        for node in walk(body):
+            if isinstance(node, IRComprehension) and node.target == name:
+                for part in (node.element, node.key, node.condition):
+                    if part is not None:
+                        inside.update(id(item) for item in walk(part))
         for node in walk(body):
             if isinstance(node, IRName) and node.name == name and id(node) not in inside:
                 escaping.add(name)
@@ -349,3 +365,54 @@ def unchecked_index_loops(loop: IRForRange) -> frozenset[tuple[str, str]]:
                 if item.target.name == loop.variable:
                     return frozenset()
     return frozenset({(container, loop.variable)})
+
+
+# --------------------------------------------------------------- reachability
+
+
+def _breaks_out(body: IRBlock) -> bool:
+    """A ``break`` in *body* that targets the enclosing loop (not a nested one)."""
+
+    def visit(node: IRNode) -> bool:
+        if isinstance(node, IRBreak):
+            return True
+        if isinstance(node, IRWhile | IRForEach | IRForRange):
+            return False
+        return any(visit(child) for child in node.children())
+
+    return visit(body)
+
+
+def can_complete(node: IRNode | None) -> bool:
+    """Whether Java considers that *node* can complete normally (JLS 14.22).
+
+    Java rejects code it can prove unreachable and C warns about it, so both
+    backends use this to decide where a fall-through guard belongs."""
+    if node is None:
+        return True
+    if isinstance(node, IRReturn | IRThrow | IRBreak | IRContinue):
+        return False
+    if isinstance(node, IRBlock):
+        return all(can_complete(statement) for statement in node.statements)
+    if isinstance(node, IRIf):
+        if node.else_body is None:
+            return True
+        return can_complete(node.then_body) or can_complete(node.else_body)
+    if isinstance(node, IRWhile):
+        test = node.test
+        if isinstance(test, IRLiteral) and test.value is True:
+            return _breaks_out(node.body)
+        return True
+    if isinstance(node, IRTry):
+        if (
+            node.finally_body is not None
+            and not node.finally_body.is_empty
+            and not can_complete(node.finally_body)
+        ):
+            return False
+        # The else body is emitted inside `if (completed) { ... }`, which Java
+        # always considers able to complete; mirror the generated shape.
+        return can_complete(node.body) or any(
+            can_complete(handler.body) for handler in node.handlers
+        )
+    return True

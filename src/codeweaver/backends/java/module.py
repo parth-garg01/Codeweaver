@@ -219,6 +219,7 @@ def generate_module_files(
             mappings=writer.mapping_dict(),
             diagnostics=bag,
             unsupported_count=len(ctx.gaps),
+            gaps=list(ctx.gaps),
         )
     )
     for klass in module.classes:
@@ -234,6 +235,7 @@ def generate_module_files(
                 mappings=writer.mapping_dict(),
                 diagnostics=bag,
                 unsupported_count=len(class_ctx.gaps),
+                gaps=list(class_ctx.gaps),
             )
         )
     return files

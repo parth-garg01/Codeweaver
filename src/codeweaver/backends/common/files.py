@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from codeweaver.diagnostics import DiagnosticBag
+from codeweaver.ir.base import IRUnsupported
 
 __all__ = ["GeneratedFile"]
 
@@ -20,6 +21,8 @@ class GeneratedFile:
     mappings: list[dict[str, Any]] = field(default_factory=list)
     diagnostics: DiagnosticBag = field(default_factory=DiagnosticBag)
     unsupported_count: int = 0
+    #: The constructs counted by ``unsupported_count``, for the report.
+    gaps: list[IRUnsupported] = field(default_factory=list)
 
     @property
     def line_count(self) -> int:

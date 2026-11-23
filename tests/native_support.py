@@ -11,6 +11,7 @@ from codeweaver.frontends.python import parse_source
 from codeweaver.graph.project_index import ProjectIndex
 from codeweaver.language_registry import registry
 from codeweaver.transforms import default_pipeline, project_pipeline
+from codeweaver.transforms.inference import inference_order
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NATIVE_PROJECT = FIXTURES / "native_project"
@@ -27,7 +28,11 @@ def translate(sources: dict[str, str], target: str) -> tuple[dict[str, str], Dia
         assert parsed.module is not None, [item.format() for item in parsed.diagnostics]
         modules.append(default_pipeline(target).run(parsed.module).module)
     index = ProjectIndex.build(modules)
-    modules = [project_pipeline(target, index).run(module).module for module in modules]
+    finished = {
+        module.name: project_pipeline(target, index).run(module).module
+        for module in inference_order(modules)
+    }
+    modules = [finished[module.name] for module in modules]
     index = ProjectIndex.build(modules)
     layout = backend.create_layout(modules, index)
     bag = DiagnosticBag()

@@ -108,6 +108,7 @@ __all__ = [
     "TypeInferencePass",
     "element_type",
     "infer_module_types",
+    "inference_order",
     "is_known",
 ]
 
@@ -388,9 +389,22 @@ class _Inferrer:
     def run(self) -> IRModule:
         module_scope = _Scope()
         body = [self.statement(statement, module_scope) for statement in self.module.body]
+        self._publish_variable_types(body)
         functions = [self.function(function, None) for function in self.module.functions]
         classes = [self.class_(klass) for klass in self.module.classes]
         return replace(self.module, body=body, functions=functions, classes=classes)
+
+    def _publish_variable_types(self, body: list[IRStatement]) -> None:
+        """Record inferred module-variable types, so modules importing them see them."""
+        for statement in body:
+            if isinstance(statement, IRVarDecl) and statement.name:
+                qualified = f"{self.module.name}.{statement.name}"
+                known = self.index.variables.get(qualified)
+                inferred = statement.var_type
+                if inferred.kind is TypeKind.UNKNOWN and statement.value is not None:
+                    inferred = _vt(statement.value) or inferred
+                if (known is None or _is_vague(known)) and not _is_vague(inferred):
+                    self.index.variables[qualified] = inferred
 
     def class_(self, klass: IRClass) -> IRClass:
         info = self.index.classes.get(f"{self.module.name}.{klass.name}")
@@ -941,6 +955,43 @@ def infer_module_types(
 ) -> IRModule:
     """Return *module* with inferred expression types filled in."""
     return _Inferrer(index, module, bag).run()
+
+
+def _is_vague(ir_type: IRType) -> bool:
+    """Whether *ir_type* is, or contains, an unknown type (``list[unknown]``)."""
+    return ir_type.kind is TypeKind.UNKNOWN or any(_is_vague(arg) for arg in ir_type.args)
+
+
+def inference_order(modules: list[IRModule]) -> list[IRModule]:
+    """*modules* with every imported project module before its importers.
+
+    Inference publishes module-variable types as it goes, so inferring in
+    import order lets ``from config import LIMITS`` see the inferred type of
+    ``LIMITS``.  Import cycles keep their source order.
+    """
+    from codeweaver.graph.dependency import resolve_relative_import
+
+    by_name = {module.name: module for module in modules}
+    ordered: list[IRModule] = []
+    state: dict[str, int] = {}
+
+    def visit(module: IRModule) -> None:
+        if state.get(module.name):
+            return
+        state[module.name] = 1
+        for imported in module.imports:
+            absolute = resolve_relative_import(module.name, imported.module, imported.level)
+            candidates = [absolute] + [f"{absolute}.{name.name}" for name in imported.names]
+            for candidate in candidates:
+                dependency = by_name.get(candidate)
+                if dependency is not None and dependency is not module:
+                    visit(dependency)
+        ordered.append(module)
+        state[module.name] = 2
+
+    for module in modules:
+        visit(module)
+    return ordered
 
 
 @dataclass
