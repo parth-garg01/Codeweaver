@@ -20,8 +20,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from codeweaver.backends.common.files import GeneratedFile
 from codeweaver.backends.typescript.module import (
-    GeneratedFile,
     ModuleLayout,
     generate_module,
     output_path_for,
@@ -117,6 +117,8 @@ class TypeScriptBackend:
         )
     )
     required_toolchains: tuple[str, ...] = field(default_factory=lambda: ("tsc",))
+    #: TypeScript's own inference covers what this backend needs.
+    uses_type_inference: bool = False
 
     def generate_module(
         self,
@@ -146,6 +148,23 @@ class TypeScriptBackend:
             generated = self.generate_module(module, layout, diagnostics=diagnostics)
             files[generated.path] = generated.contents
         return files
+
+    # -- pipeline interface --------------------------------------------------
+
+    def create_layout(self, modules: list[IRModule], index: Any = None) -> ModuleLayout:  # noqa: ARG002
+        return ModuleLayout.for_modules(modules)
+
+    def generate_files(
+        self,
+        module: IRModule,
+        layout: ModuleLayout,
+        *,
+        diagnostics: DiagnosticBag | None = None,
+    ) -> list[GeneratedFile]:
+        return [self.generate_module(module, layout, diagnostics=diagnostics)]
+
+    def project_files(self, project_name: str, layout: ModuleLayout) -> dict[str, str]:  # noqa: ARG002
+        return project_files(project_name, strict=self.strict)
 
     def output_path(self, source_path: str) -> str:
         return output_path_for(source_path)

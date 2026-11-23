@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
+from codeweaver.backends.common.files import GeneratedFile
 from codeweaver.backends.typescript.context import EmitContext
 from codeweaver.backends.typescript.exceptions import (
     is_builtin_exception,
@@ -90,31 +91,6 @@ def _relative_posix(source_dir: PurePosixPath, target_dir: PurePosixPath) -> str
     if not upwards and not downwards:
         return "."
     return "/".join([*(upwards or ["."]), *downwards])
-
-
-@dataclass
-class GeneratedFile:
-    """One generated target file and everything learned while generating it."""
-
-    path: str
-    source_path: str
-    contents: str
-    mappings: list[dict[str, Any]] = field(default_factory=list)
-    diagnostics: DiagnosticBag = field(default_factory=DiagnosticBag)
-    unsupported_count: int = 0
-
-    @property
-    def line_count(self) -> int:
-        return self.contents.count("\n")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "path": self.path,
-            "sourcePath": self.source_path,
-            "lineCount": self.line_count,
-            "unsupportedCount": self.unsupported_count,
-            "diagnostics": self.diagnostics.to_list(),
-        }
 
 
 def generate_module(

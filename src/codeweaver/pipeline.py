@@ -30,6 +30,7 @@ import codeweaver.adapters  # noqa: F401
 from codeweaver.diagnostics import DiagnosticBag, SourceSpan
 from codeweaver.errors import CodeWeaverError, UnsupportedPairError
 from codeweaver.graph import DependencyGraph, build_dependency_graph, build_symbol_index
+from codeweaver.graph.project_index import ProjectIndex
 from codeweaver.ir import IR_SCHEMA_VERSION
 from codeweaver.ir.declarations import IRModule
 from codeweaver.ir.schema import validate_module
@@ -39,7 +40,7 @@ from codeweaver.project_intake.manifests import Manifest, detect_manifests
 from codeweaver.project_intake.paths import normalise_root
 from codeweaver.project_intake.scanner import ScanOptions, ScanResult, scan_project
 from codeweaver.reporting import FileCounts, MigrationReport
-from codeweaver.transforms import default_pipeline
+from codeweaver.transforms import default_pipeline, project_pipeline
 from codeweaver.transforms.construction import ClassConstructionPass
 from codeweaver.transforms.inheritance import collect_inherited_fields
 from codeweaver.validation import ExecutionPolicy, detect_toolchains, validate_project
@@ -284,25 +285,34 @@ def run_migration(
         pipeline.passes.insert(0, ClassConstructionPass.for_module(module, analysis.graph.symbols))
         result = pipeline.run(module, analysis.diagnostics)
         transformed.append(result.module)
-        for name in result.applied_passes:
-            if name not in applied:
-                applied.append(name)
-        for name in result.skipped_passes:
-            if name not in skipped:
-                skipped.append(name)
+        _merge_pass_names(result, applied, skipped)
+
+    # Project-level passes need every module's local passes to have run first:
+    # type inference reads fields the field pass declared in other modules.
+    index = (
+        ProjectIndex.build(transformed) if getattr(backend, "uses_type_inference", False) else None
+    )
+    second: list[IRModule] = []
+    for module in transformed:
+        result = project_pipeline(options.target, index).run(module, analysis.diagnostics)
+        second.append(result.module)
+        _merge_pass_names(result, applied, skipped)
+    transformed = second
+    if index is not None:
+        # Backends resolve names against the final, fully typed IR.
+        index = ProjectIndex.build(transformed)
     # A pass that had work to do in any module counts as applied; listing it as
     # both applied and skipped would tell the reader nothing.
     skipped = [name for name in skipped if name not in applied]
 
     written: list[str] = []
+    translated = 0
     cancelled = False
     mappings: dict[str, list[dict[str, Any]]] = {}
     ordered = _ordered_modules(transformed, plan)
     total = len(ordered)
-    from codeweaver.backends.typescript import ModuleLayout
-
-    layout = ModuleLayout.for_modules(transformed)
-    for index, module in enumerate(ordered, start=1):
+    layout = backend.create_layout(transformed, index)
+    for position, module in enumerate(ordered, start=1):
         if should_cancel is not None and should_cancel():
             cancelled = True
             analysis.diagnostics.warning(
@@ -313,19 +323,17 @@ def run_migration(
             )
             break
         if progress is not None:
-            progress("migrate", index, total, module.name)
-        generated = backend.generate_module(module, layout, diagnostics=analysis.diagnostics)
-        target_path = output / generated.path
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(generated.contents, encoding="utf-8")
-        written.append(generated.path)
-        mappings[generated.path] = generated.mappings
+            progress("migrate", position, total, module.name)
+        for generated in backend.generate_files(module, layout, diagnostics=analysis.diagnostics):
+            _write(output, generated.path, generated.contents)
+            written.append(generated.path)
+            if generated.mappings:
+                mappings[generated.path] = generated.mappings
+        translated += 1
 
     if not cancelled:
-        from codeweaver.backends.typescript import project_files
-
-        for relative, contents in project_files(options.project_name).items():
-            (output / relative).write_text(contents, encoding="utf-8")
+        for relative, contents in backend.project_files(options.project_name, layout).items():
+            _write(output, relative, contents)
             written.append(relative)
 
     report = _report_for(
@@ -342,10 +350,26 @@ def run_migration(
         supported_constructs=list(frontend.supported_constructs),
         mappings=mappings,
         cancelled=cancelled,
+        translated=translated,
     )
     return MigrationOutcome(
         report=report, analysis=analysis, plan=plan, written_files=written, cancelled=cancelled
     )
+
+
+def _merge_pass_names(result: Any, applied: list[str], skipped: list[str]) -> None:
+    for name in result.applied_passes:
+        if name not in applied:
+            applied.append(name)
+    for name in result.skipped_passes:
+        if name not in skipped:
+            skipped.append(name)
+
+
+def _write(output: Path, relative: str, contents: str) -> None:
+    target_path = output / relative
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(contents, encoding="utf-8")
 
 
 def _ordered_modules(modules: list[IRModule], plan: MigrationPlan) -> list[IRModule]:
@@ -370,9 +394,10 @@ def _report_for(
     supported_constructs: list[str] | None = None,
     mappings: dict[str, list[dict[str, Any]]] | None = None,
     cancelled: bool = False,
+    translated: int = 0,
 ) -> MigrationReport:
     counts = analysis.counts
-    counts.translated = len([path for path in (written or []) if path.endswith(".ts")])
+    counts.translated = translated
     report = MigrationReport(
         source_language=analysis.source_language,
         target_language=options.target,
