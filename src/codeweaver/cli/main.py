@@ -95,12 +95,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_parser = with_project("plan", "Produce a migration plan for review.")
     plan_parser.add_argument(
-        "--to", dest="target", default="typescript", help="target language (default: typescript)"
+        "--to",
+        dest="target",
+        default="typescript",
+        help="target language: typescript, cpp, java or c (default: typescript)",
     )
 
     migrate_parser = with_project("migrate", "Generate the target project.")
     migrate_parser.add_argument(
-        "--to", dest="target", default="typescript", help="target language (default: typescript)"
+        "--to",
+        dest="target",
+        default="typescript",
+        help="target language: typescript, cpp, java or c (default: typescript)",
     )
     migrate_parser.add_argument(
         "--out", type=Path, required=True, help="output directory (must be outside the project)"
@@ -138,7 +144,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate_parser.add_argument("output", type=Path, help="the generated project directory")
     validate_parser.add_argument(
-        "--to", dest="target", default="typescript", help="target language (default: typescript)"
+        "--to",
+        dest="target",
+        default="typescript",
+        help="target language: typescript, cpp, java or c (default: typescript)",
     )
     validate_parser.add_argument(
         "--allow-tests", action="store_true", help="run tests; this executes generated code"

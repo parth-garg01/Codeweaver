@@ -90,7 +90,7 @@ def _escaping_declarations(body: IRBlock) -> dict[int, IRVarDecl]:
             for child in _child_blocks(statement):
                 # Everything in the function except this child block is
                 # "outside" it.
-                others = [s for s in block.statements if s is not statement]
+                others: list[IRNode] = [s for s in block.statements if s is not statement]
                 others += [b for b in _child_blocks(statement) if b is not child]
                 if isinstance(statement, IRIf | IRWhile):
                     others.append(statement.test)

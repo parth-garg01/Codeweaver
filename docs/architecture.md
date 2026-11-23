@@ -20,13 +20,16 @@ Language-specific code lives on either side of it and nowhere else.
        +--> planner .... ordered groups, risk labels, required toolchains
        |
        v
- transforms ........... deterministic IR -> IR passes
+ transforms ........... deterministic IR -> IR passes, per module
+       |
+       v
+ project passes ....... type inference (modules in import order), hoisting
        |
        v
  backends/<lang> ...... IR -> target source + project manifests  (language-specific)
-       |
+       |               typescript, cpp, java, c; shared analyses in backends/common
        v
- validation ........... local toolchains, execution policy, tsc runner
+ validation ........... local toolchains, execution policy, tsc / c++ / javac / cc
        |
        v
  reporting ............ one report, rendered as text, Markdown or JSON
@@ -54,6 +57,11 @@ and `tests/security/test_no_network.py` would not be the test that caught it.
 a reason and a hint. Backends emit a `CODEWEAVER-UNSUPPORTED` marker for it and
 the report counts it. This is why a migration can be `incomplete`: the output
 exists and is honestly labelled as partial.
+
+A backend can also meet IR it has no spelling for (a `dict` in C, say). It
+records the gap the same way, the generated file carries it, and the pipeline
+merges it into the report, so a backend-only gap makes the migration just as
+`incomplete` as a frontend one.
 
 **Skipping is not passing.** `CheckResult` has four outcomes and no way to
 collapse `skipped` into `passed`. A report where no check ran is `incomplete`,
@@ -110,8 +118,45 @@ module plus diagnostics, and honest `supported_constructs` and
 `known_limitations` tuples. It must produce `IRUnsupported` for anything it
 cannot map.
 
-A new **backend** implements `Backend`: `generate_module(module)`, a
-`file_extension`, `required_toolchains`, and the same two honesty tuples.
+A new **backend** implements `Backend`: `create_layout(modules, index)` for
+the project-wide decisions (paths, collision-free symbol names, entry points),
+`generate_files(module, layout)` for the files one module becomes,
+`project_files(name, layout)` for build files and runtime support, a
+`file_extension`, `required_toolchains`, `uses_type_inference`, and the same two
+honesty tuples. Statically typed targets set `uses_type_inference` and read the
+`value_type` the inference pass attaches to every expression; an expression
+whose type is still unknown is a gap, never a guess.
+
+Add a `CompilerProfile` in `validation/compilers.py` so the output is checked
+with the target's compiler, with diagnostics mapped back to Python lines
+through the source maps.
+
+## The native backends
+
+`backends/cpp`, `backends/java` and `backends/c` share one structure:
+
+| File | Owns |
+| ---- | ---- |
+| `context.py` | the project layout (file paths, symbol names, entry modules) and per-file emission state |
+| `naming.py` | reserved words and identifier spelling |
+| `types.py` | IR types to target types |
+| `expressions.py` | expressions, operators, builtins, method calls |
+| `statements.py` | statements, loops, exceptions |
+| `module.py` | classes and modules to files |
+| `backend.py` | the registry adapter and build files (CMake, Maven) |
+| `runtime/` | the small runtime shipped inside each generated project |
+
+The analyses all three need live in `backends/common/analysis.py`:
+which parameters a callee mutates, which loop variables outlive their loop,
+which `xs[i]` inside `for i in range(len(xs))` can skip its bounds check, and
+whether a block can complete normally (so a fall-through guard goes exactly
+where the target compiler requires one).
+
+Performance is a design input, not an afterthought: only overridden methods
+dispatch dynamically, primitives stay unboxed wherever the target allows, and
+the runtimes are header-only (C, C++) so the compiler can inline them.
+`benchmarks/run.py` measures both conversion time and the speed of the
+generated programs.
 
 Then declare the pair in `adapters.py`. A pair stays `PARTIAL` until its
 coverage justifies otherwise, and it needs a fixture project under

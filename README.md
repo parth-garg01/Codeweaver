@@ -14,9 +14,19 @@ you exactly what it did not.
 
 ## Status
 
-| Source | Target | Status |
-| ------ | ------ | ------ |
-| Python 3.11+ | TypeScript 5 | partial — documented construct subset |
+| Source | Target | Status | Validated with |
+| ------ | ------ | ------ | -------------- |
+| Python 3.11+ | TypeScript 5 | partial — documented construct subset | `tsc --noEmit` (strict) |
+| Python 3.11+ | C++20 | partial — documented construct subset | `c++ -std=c++20 -fsyntax-only` |
+| Python 3.11+ | Java 17 | partial — documented construct subset | `javac` |
+| Python 3.11+ | C11 | partial — narrower subset (no dict/set/tuple, no try/except) | `cc -std=c11 -fsyntax-only` |
+
+The native targets are built for speed as well as fidelity: int is a 64-bit
+integer, float a double, indexing inside `for i in range(len(xs))` skips the
+bounds check it provably cannot fail, and only methods that are actually
+overridden dispatch dynamically. On the CPU-bound workload in
+[`benchmarks/`](benchmarks/README.md) the generated C runs about 30x faster
+than CPython, C++ about 14x and Java about 5x, with byte-identical output.
 
 `partial` is not a softer word for `supported`. A deliberately scoped set of
 constructs is translated; everything else produces a diagnostic, a
@@ -41,9 +51,11 @@ Running from a checkout works without installing:
 PYTHONPATH=src python3 -m codeweaver.cli --help
 ```
 
-To validate generated TypeScript you also need `tsc` on your `PATH`
-(`npm install -g typescript`). Without it, validation is reported as **skipped**
-and the migration as **incomplete** — never as a pass.
+Validation uses the target's own toolchain, found on your `PATH`: `tsc`
+(`npm install -g typescript`) for TypeScript, a C++20 compiler (`c++`,
+`clang++` or `g++`, or `$CXX`) for C++, `javac` (JDK 17+) for Java, and a C11
+compiler (`cc`, `clang` or `gcc`, or `$CC`) for C. Without it, validation is
+reported as **skipped** and the migration as **incomplete** — never as a pass.
 
 ## Use it
 
@@ -53,6 +65,9 @@ codeweaver scan   ./my-project       # which files would be used, and what was s
 codeweaver analyze ./my-project      # parse, index symbols, build the graph
 codeweaver plan   ./my-project --to typescript
 codeweaver migrate ./my-project --to typescript --out ../my-project-ts
+codeweaver migrate ./my-project --to cpp  --out ../my-project-cpp    # CMake project
+codeweaver migrate ./my-project --to java --out ../my-project-java   # Maven project
+codeweaver migrate ./my-project --to c    --out ../my-project-c      # CMake project
 codeweaver validate ../my-project-ts
 codeweaver report ./my-project --format markdown
 ```
@@ -103,6 +118,9 @@ python3 -m pip install -e '.[dev]'
 
 [`docs/architecture.md`](docs/architecture.md) explains the pipeline and where
 language-specific knowledge is allowed to live.
+`PYTHONPATH=src python3 benchmarks/run.py` measures conversion speed for every
+target and the speed of the generated native programs; see
+[`benchmarks/README.md`](benchmarks/README.md).
 [`CONTRIBUTING.md`](CONTRIBUTING.md) has the workflow for a change.
 
 ## License

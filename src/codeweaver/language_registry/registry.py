@@ -63,8 +63,22 @@ class Backend(Protocol):
     supported_constructs: tuple[str, ...]
     known_limitations: tuple[str, ...]
     required_toolchains: tuple[str, ...]
+    #: Whether the project-level type inference pass must run before generation.
+    uses_type_inference: bool
+
+    def create_layout(self, modules: list[Any], index: Any = None) -> Any:
+        """Project-wide decisions made once: file paths, symbol names, entry points."""
+        ...
+
+    def generate_files(self, module: Any, layout: Any, *, diagnostics: Any = None) -> list[Any]:
+        """Every file generated from one module (a header and a source, say)."""
+        ...
 
     def generate_module(self, module: Any) -> Any: ...
+
+    def project_files(self, project_name: str, layout: Any) -> dict[str, str]:
+        """Build files and runtime support written once per project."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

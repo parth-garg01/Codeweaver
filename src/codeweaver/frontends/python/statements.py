@@ -12,12 +12,13 @@ Two decisions here carry most of the weight:
 from __future__ import annotations
 
 import ast
+from typing import cast
 
 from codeweaver.frontends.python.annotations import annotation_to_type
 from codeweaver.frontends.python.context import ConversionContext
 from codeweaver.frontends.python.expressions import BINARY_OPS, convert_expression
 from codeweaver.ir.base import IRNode
-from codeweaver.ir.expressions import IRIndex, IRLiteral, IRName
+from codeweaver.ir.expressions import IRExpression, IRIndex, IRLiteral, IRName
 from codeweaver.ir.statements import (
     IRAssert,
     IRAssign,
@@ -32,6 +33,7 @@ from codeweaver.ir.statements import (
     IRIf,
     IRNoOp,
     IRReturn,
+    IRStatement,
     IRThrow,
     IRTry,
     IRVarDecl,
@@ -111,7 +113,9 @@ def _destructure(node: ast.Assign, target: ast.Tuple | ast.List, ctx: Conversion
             hint="assign each element on its own line",
         )
     span = ctx.span(node)
-    statements: list[IRNode] = []
+    # IRBlock holds statements; _bind_name and IRUnsupported targets are typed
+    # as IRNode, and both are valid in a statement position.
+    statements: list[IRStatement] = []
 
     def temp(value) -> IRName:
         ctx.temp_counter += 1
@@ -121,9 +125,10 @@ def _destructure(node: ast.Assign, target: ast.Tuple | ast.List, ctx: Conversion
 
     def bind(item: ast.expr, value) -> None:
         if isinstance(item, ast.Name):
-            statements.append(_bind_name(item.id, t_unknown(), value, node, ctx))
+            statements.append(cast(IRStatement, _bind_name(item.id, t_unknown(), value, node, ctx)))
         else:
-            statements.append(IRAssign(convert_expression(item, ctx), value, span=ctx.span(item)))
+            assigned = cast(IRExpression, convert_expression(item, ctx))
+            statements.append(IRAssign(assigned, value, span=ctx.span(item)))
 
     source = node.value
     if isinstance(source, ast.Tuple | ast.List) and not any(
