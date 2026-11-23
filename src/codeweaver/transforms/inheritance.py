@@ -62,6 +62,15 @@ def collect_inherited_fields(modules: list[IRModule]) -> dict[str, dict[str, IRT
         for klass in module.classes:
             by_name.setdefault(klass.name, klass)
 
+    # Each class's own fields are needed once per descendant; compute them once.
+    owned_cache: dict[str, dict[str, IRType]] = {}
+
+    def owned(base_name: str, base: IRClass) -> dict[str, IRType]:
+        found = owned_cache.get(base_name)
+        if found is None:
+            found = owned_cache[base_name] = _own_fields(base)
+        return found
+
     inherited: dict[str, dict[str, IRType]] = {}
     for name, klass in by_name.items():
         collected: dict[str, IRType] = {}
@@ -78,7 +87,7 @@ def collect_inherited_fields(modules: list[IRModule]) -> dict[str, dict[str, IRT
                 base = by_name.get(base_name)
                 if base is None:
                     continue
-                for field_name, field_type in _own_fields(base).items():
+                for field_name, field_type in owned(base_name, base).items():
                     existing = collected.get(field_name)
                     if existing is None or existing.kind is TypeKind.UNKNOWN:
                         collected[field_name] = field_type

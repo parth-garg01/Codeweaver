@@ -174,21 +174,26 @@ def escaping_loop_variables(body: IRNode) -> set[str]:
             loops.setdefault(node.target.name, []).append(node)
     if not loops:
         return set()
+    references: dict[str, list[int]] = {}
+    comprehensions: list[IRComprehension] = []
+    for node in walk(body):
+        if isinstance(node, IRName) and node.name in loops:
+            references.setdefault(node.name, []).append(id(node))
+        elif isinstance(node, IRComprehension) and node.target in loops:
+            comprehensions.append(node)
     escaping: set[str] = set()
     for name, binders in loops.items():
         inside: set[int] = set()
         for loop in binders:
             inside.update(id(item) for item in walk(loop))
         # A comprehension binding the same name has its own scope in Python 3.
-        for node in walk(body):
-            if isinstance(node, IRComprehension) and node.target == name:
-                for part in (node.element, node.key, node.condition):
+        for comprehension in comprehensions:
+            if comprehension.target == name:
+                for part in (comprehension.element, comprehension.key, comprehension.condition):
                     if part is not None:
                         inside.update(id(item) for item in walk(part))
-        for node in walk(body):
-            if isinstance(node, IRName) and node.name == name and id(node) not in inside:
-                escaping.add(name)
-                break
+        if any(reference not in inside for reference in references.get(name, ())):
+            escaping.add(name)
     return escaping
 
 

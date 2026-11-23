@@ -155,6 +155,10 @@ class ProjectIndex:
     """Classes, functions, variables and per-module scopes for a whole project."""
 
     modules: dict[str, IRModule] = field(default_factory=dict)
+    _ancestor_cache: dict[str, tuple[ClassInfo, ...]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    _ancestor_cache_size: int = field(default=-1, repr=False, compare=False)
     classes: dict[str, ClassInfo] = field(default_factory=dict)
     functions: dict[str, FunctionInfo] = field(default_factory=dict)
     variables: dict[str, IRType] = field(default_factory=dict)
@@ -347,7 +351,25 @@ class ProjectIndex:
         )
 
     def ancestors(self, info: ClassInfo) -> list[ClassInfo]:
-        """*info* followed by its project base classes, nearest first."""
+        """*info* followed by its project base classes, nearest first.
+
+        Backends ask this for every attribute and call, so chains are cached;
+        the class table is fixed once the index is built.  The cache is
+        checked against the class table's size so a test that adds a class
+        afterwards still gets a fresh answer.
+        """
+        cache = self._ancestor_cache
+        if self._ancestor_cache_size != len(self.classes):
+            cache.clear()
+            self._ancestor_cache_size = len(self.classes)
+        cached = cache.get(info.qualified)
+        if cached is not None and cached[0] is info:
+            return list(cached)
+        chain = self._ancestors(info)
+        cache[info.qualified] = tuple(chain)
+        return list(chain)
+
+    def _ancestors(self, info: ClassInfo) -> list[ClassInfo]:
         chain = [info]
         seen = {info.qualified}
         current = info
